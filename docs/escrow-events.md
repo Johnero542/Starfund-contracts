@@ -168,12 +168,18 @@ Emitted when an investor records their payout claim.
 
 **Data:**
 1. `payout` (i128) — gross payout transferred to the investor
+2. `effective_yield_bps` (i64) — investor-specific annualized yield used to calculate the payout
+3. `commitment_lock_secs` (u64) — original lock duration committed on the investor's first deposit
 
 **Example (JSON Decoded):**
 ```json
 {
   "topics": ["inv_claim", "INV_001", "G...INVESTOR"],
-  "data": { "payout": "80000000" }
+  "data": {
+    "payout": "80000000",
+    "effective_yield_bps": 900,
+    "commitment_lock_secs": 100
+  }
 }
 ```
 

@@ -3980,17 +3980,22 @@ fn settlement_pool_unchanged_for_uniform_base_yield() {
 #[test]
 fn investor_payout_claimed_event_carries_payout_amount() {
     let env = Env::default();
+    let mut tiers = SorobanVec::new(&env);
+    tiers.push_back(YieldTier {
+        min_lock_secs: 100,
+        yield_bps: 900,
+    });
     let (client, token, contract_id, _treasury) =
-        setup_tiered_pool(&env, "PAYEVT", 1_000i128, 800i64, None);
+        setup_tiered_pool(&env, "PAYEVT", 1_000i128, 800i64, Some(tiers));
 
     let investor = Address::generate(&env);
     token.stellar.mint(&investor, &1_000i128);
-    client.fund(&investor, &1_000i128);
+    client.fund_with_commitment(&investor, &1_000i128, &100u64);
     client.settle();
 
     let pool = client.get_settlement_pool();
     token.stellar.mint(&contract_id, &(pool - 1_000i128));
-    env.ledger().set_timestamp(1);
+    env.ledger().set_timestamp(100);
 
     client.claim_investor_payout(&investor);
 
@@ -3999,12 +4004,14 @@ fn investor_payout_claimed_event_carries_payout_amount() {
         investor: investor.clone(),
         invoice_id: client.get_escrow().invoice_id,
         payout: pool,
+        effective_yield_bps: 900,
+        commitment_lock_secs: 100,
     }
     .to_xdr(&env, &contract_id);
 
     assert_eq!(
         env.events().all().events().last().unwrap().clone(),
         expected,
-        "InvestorPayoutClaimed must include the payout amount",
+        "InvestorPayoutClaimed must include payout, effective yield, and commitment lock",
     );
 }

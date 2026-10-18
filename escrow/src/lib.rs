@@ -548,6 +548,7 @@ pub(crate) fn extend_ttl_for_activity(env: &Env, escrow: &InvoiceEscrow, investo
             DataKey::InvestorContribution(addr.clone()),
             DataKey::InvestorEffectiveYield(addr.clone()),
             DataKey::InvestorClaimNotBefore(addr.clone()),
+            keys::investor_committed_lock_secs(addr.clone()),
             DataKey::InvestorClaimed(addr.clone()),
             DataKey::InvestorRefunded(addr.clone()),
             DataKey::InvestorAllowlisted(addr),
@@ -1553,6 +1554,9 @@ pub enum DataKey {
     /// Ledger timestamp recorded when `partial_settle` closes funding early.
     /// Absent ⇒ funding has not been closed through `partial_settle`.
     PartialSettledAt,
+    /// Original lock duration selected by an investor's first funding call.
+    /// Persistent per-investor key; absent on legacy positions and treated as `0`.
+    InvestorCommittedLockSecs(Address),
 }
 
 // --- Data types ---
@@ -2751,6 +2755,10 @@ pub struct InvestorPayoutClaimed {
     pub invoice_id: Symbol,
     /// Gross payout transferred to the investor in the funding token.
     pub payout: i128,
+    /// Effective annualized yield applied to this investor's payout.
+    pub effective_yield_bps: i64,
+    /// Original lock duration committed on the investor's first funding call.
+    pub commitment_lock_secs: u64,
 }
 
 #[contractevent]
@@ -4543,6 +4551,23 @@ impl StarfundEscrow {
             .set(&keys::investor_claim_not_before(investor), &value);
     }
 
+    fn get_persistent_investor_committed_lock_secs(env: &Env, investor: Address) -> u64 {
+        env.storage()
+            .persistent()
+            .get(&keys::investor_committed_lock_secs(investor))
+            .unwrap_or(0)
+    }
+
+    fn set_persistent_investor_committed_lock_secs(
+        env: &Env,
+        investor: Address,
+        value: u64,
+    ) {
+        env.storage()
+            .persistent()
+            .set(&keys::investor_committed_lock_secs(investor), &value);
+    }
+
     fn remove_investor_from_index(env: &Env, investor: &Address) -> bool {
         let mut index: Vec<Address> = env
             .storage()
@@ -4574,6 +4599,9 @@ impl StarfundEscrow {
         env.storage()
             .persistent()
             .remove(&keys::investor_claim_not_before(investor.clone()));
+        env.storage()
+            .persistent()
+            .remove(&keys::investor_committed_lock_secs(investor));
     }
 
     fn get_persistent_investor_claimed(env: &Env, investor: Address) -> bool {
@@ -4784,6 +4812,12 @@ impl StarfundEscrow {
     /// Earliest ledger timestamp for [`StarfundEscrow::claim_investor_payout`]; `0` if not gated.
     pub fn get_investor_claim_not_before(env: Env, investor: Address) -> u64 {
         Self::get_persistent_investor_claim_not_before(&env, investor)
+    }
+
+    /// Original lock duration in seconds recorded on the investor's first deposit.
+    /// Returns `0` for simple-fund and legacy positions without a stored commitment.
+    pub fn get_investor_commitment_lock_secs(env: Env, investor: Address) -> u64 {
+        Self::get_persistent_investor_committed_lock_secs(&env, investor)
     }
     /// Returns the yield-tier table configured at `init`.
     /// Returns an empty `Vec` when no tiers were configured.
@@ -7165,23 +7199,28 @@ impl StarfundEscrow {
 
         let resolution: YieldResolution;
         let mut claim_nb = 0u64;
+        let mut recorded_lock_secs = 0u64;
 
         if simple_fund {
-            resolution = if prev == 0 {
-                YieldResolution {
+            if prev == 0 {
+                resolution = YieldResolution {
                     effective_yield_bps: escrow.yield_bps,
                     matched_lock_secs: 0,
-                }
+                };
             } else {
-                YieldResolution {
+                resolution = YieldResolution {
                     effective_yield_bps: Self::get_persistent_investor_effective_yield(
                         &env,
                         investor.clone(),
                     )
                     .unwrap_or(escrow.yield_bps),
                     matched_lock_secs: 0,
-                }
-            };
+                };
+                claim_nb =
+                    Self::get_persistent_investor_claim_not_before(&env, investor.clone());
+                recorded_lock_secs =
+                    Self::get_persistent_investor_committed_lock_secs(&env, investor.clone());
+            }
         } else {
             ensure(&env, prev == 0, EscrowError::TieredSecondDeposit);
             resolution = Self::effective_yield_for_commitment(
@@ -7189,6 +7228,7 @@ impl StarfundEscrow {
                 escrow.yield_bps,
                 committed_lock_secs,
             );
+            recorded_lock_secs = committed_lock_secs;
             let now = env.ledger().timestamp();
             claim_nb = if committed_lock_secs == 0 {
                 0u64
@@ -7242,6 +7282,11 @@ impl StarfundEscrow {
             investor_effective_yield_bps,
         );
         Self::set_persistent_investor_claim_not_before(&env, investor.clone(), claim_nb);
+        Self::set_persistent_investor_committed_lock_secs(
+            &env,
+            investor.clone(),
+            recorded_lock_secs,
+        );
 
         if prev == 0 {
             let already_present = Self::remove_investor_from_index(&env, &investor);
@@ -7897,11 +7942,19 @@ impl StarfundEscrow {
             payout,
         );
 
+        let effective_yield_bps =
+            Self::get_persistent_investor_effective_yield(&env, investor.clone())
+                .unwrap_or(escrow.yield_bps);
+        let commitment_lock_secs =
+            Self::get_persistent_investor_committed_lock_secs(&env, investor.clone());
+
         InvestorPayoutClaimed {
             name: symbol_short!("inv_claim"),
             investor,
             invoice_id: escrow.invoice_id.clone(),
             payout,
+            effective_yield_bps,
+            commitment_lock_secs,
         }
         .publish(&env);
 
