@@ -3696,7 +3696,7 @@ impl StarfundEscrow {
         }
 
         RegistryRefRebound {
-            name: Symbol::new(&env, "reg_rebind"),
+            name: symbol_short!("reg_rebd"),
             invoice_id: escrow.invoice_id,
             registry,
         }

@@ -229,7 +229,7 @@ membership or as a security boundary.
 ### Mutation path
 
 Only the current escrow admin may call `rebind_registry_ref` or `clear_registry_ref`.
-Each call emits a `RegistryRefRebound` event (topic: `reg_rebind`) carrying the new
+Each call emits a `RegistryRefRebound` event (topic: `reg_rebd`) carrying the new
 `Option<Address>` value. Off-chain indexers should subscribe to this event to re-sync
 their cached pointer without polling.
 

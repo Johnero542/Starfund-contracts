@@ -3669,7 +3669,7 @@ fn test_rebind_registry_ref_sets_and_clears() {
     // Event sanity: last event should be clear (registry == None)
     let last = clear_events.events().last().unwrap().clone();
     let expected = crate::RegistryRefRebound {
-        name: Symbol::new(&env, "reg_rebind"),
+        name: symbol_short!("reg_rebd"),
         invoice_id: invoice_id.clone(),
         registry: None,
     }
@@ -3690,7 +3690,7 @@ fn test_rebind_registry_ref_sets_and_clears() {
     // Event sanity: last event should be clear (registry == None) from clear_registry_ref
     let last = clear2_events.events().last().unwrap().clone();
     let expected = crate::RegistryRefRebound {
-        name: Symbol::new(&env, "reg_rebind"),
+        name: symbol_short!("reg_rebd"),
         invoice_id,
         registry: None,
     }
@@ -3827,14 +3827,14 @@ fn test_registry_ref_does_not_affect_settlement_or_funding() {
     let invoice_id = client.get_escrow().invoice_id.clone();
     let last = all_events.events().last().unwrap().clone();
     let expected_clear = crate::RegistryRefRebound {
-        name: Symbol::new(&env, "reg_rebind"),
+        name: symbol_short!("reg_rebd"),
         invoice_id,
         registry: None,
     }
     .to_xdr(&env, &contract_id);
     assert_eq!(
         last, expected_clear,
-        "last event must be reg_rebind with None"
+        "last event must be reg_rebd with None"
     );
 }
 
