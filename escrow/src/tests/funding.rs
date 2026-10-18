@@ -226,6 +226,28 @@ fn test_unknown_investor_contribution_is_zero() {
 }
 
 #[test]
+fn test_get_contributions_enforces_bounded_batch_size() {
+    let env = Env::default();
+    let client = deploy(&env);
+    let mut max_batch = SorobanVec::new(&env);
+    for _ in 0..crate::MAX_INVESTOR_READ_BATCH {
+        max_batch.push_back(Address::generate(&env));
+    }
+
+    let contributions = client.get_contributions(&max_batch);
+    assert_eq!(contributions.len(), crate::MAX_INVESTOR_READ_BATCH);
+    for contribution in contributions {
+        assert_eq!(contribution, 0);
+    }
+
+    max_batch.push_back(Address::generate(&env));
+    assert_contract_error(
+        client.try_get_contributions(&max_batch),
+        EscrowError::ContributionReadBatchTooLarge,
+    );
+}
+
+#[test]
 
 fn test_repeated_funding_accumulates_contribution() {
     let env = Env::default();
