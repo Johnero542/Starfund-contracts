@@ -3475,7 +3475,7 @@ fn test_rebind_registry_ref_before_and_after_funding() {
     default_init(&client, &env, &admin, &sme);
 
     // Before funding, admin may rebind the registry.
-    client.rebind_registry_ref(&Some(registry.clone()));
+    client.rebind_registry_ref(&Some(registry.clone()), &0u32);
     assert_eq!(client.get_registry_ref(), Some(registry.clone()));
 
     // After funding, rebind should be rejected.
@@ -3483,7 +3483,7 @@ fn test_rebind_registry_ref_before_and_after_funding() {
     client.fund(&investor, &TARGET);
     let new_registry = Address::generate(&env);
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.rebind_registry_ref(&Some(new_registry))
+        client.rebind_registry_ref(&Some(new_registry), &1u32)
     }));
     assert!(res.is_err());
 }
@@ -3645,16 +3645,24 @@ fn test_rebind_registry_ref_sets_and_clears() {
 
     let invoice_id = client.get_escrow().invoice_id.clone();
 
+    assert_eq!(client.get_admin_nonce(), 0);
+    assert_contract_error(
+        client.try_rebind_registry_ref(&Some(reg1.clone()), &1u32),
+        EscrowError::AdminNonceMismatch,
+    );
+    assert_eq!(client.get_admin_nonce(), 0);
+
     // Set to reg1
-    client.rebind_registry_ref(&Some(reg1.clone()));
+    client.rebind_registry_ref(&Some(reg1.clone()), &0u32);
+    assert_eq!(client.get_admin_nonce(), 1);
     assert_eq!(client.get_registry_ref(), Some(reg1.clone()));
 
     // Change to reg2
-    client.rebind_registry_ref(&Some(reg2.clone()));
+    client.rebind_registry_ref(&Some(reg2.clone()), &1u32);
     assert_eq!(client.get_registry_ref(), Some(reg2.clone()));
 
     // Clear to None
-    client.rebind_registry_ref(&None);
+    client.rebind_registry_ref(&None, &2u32);
     let clear_events = env.events().all();
     assert_eq!(client.get_registry_ref(), None);
 
@@ -3670,13 +3678,14 @@ fn test_rebind_registry_ref_sets_and_clears() {
     assert_eq!(last, expected);
 
     // Set to reg1 again to test clear_registry_ref
-    client.rebind_registry_ref(&Some(reg1.clone()));
+    client.rebind_registry_ref(&Some(reg1.clone()), &3u32);
     assert_eq!(client.get_registry_ref(), Some(reg1.clone()));
 
     // Clear using clear_registry_ref
-    client.clear_registry_ref();
+    client.clear_registry_ref(&4u32);
     let clear2_events = env.events().all();
     assert_eq!(client.get_registry_ref(), None);
+    assert_eq!(client.get_admin_nonce(), 5);
 
     // Event sanity: last event should be clear (registry == None) from clear_registry_ref
     let last = clear2_events.events().last().unwrap().clone();
@@ -3719,7 +3728,7 @@ fn test_rebind_registry_ref_requires_admin_auth() {
     );
 
     env.mock_auths(&[]);
-    client.rebind_registry_ref(&Some(Address::generate(&env)));
+    client.rebind_registry_ref(&Some(Address::generate(&env)), &0u32);
 }
 
 /// Doc-backing test: rebinding or clearing the registry-reference pointer must not affect
@@ -3775,7 +3784,7 @@ fn test_registry_ref_does_not_affect_settlement_or_funding() {
     let funded_before = client.get_escrow().funded_amount;
 
     // Bind a registry reference — funded_amount must be unchanged.
-    client.rebind_registry_ref(&Some(registry.clone()));
+    client.rebind_registry_ref(&Some(registry.clone()), &0u32);
     assert_eq!(client.get_registry_ref(), Some(registry.clone()));
     assert_eq!(
         client.get_escrow().funded_amount,
@@ -3785,7 +3794,7 @@ fn test_registry_ref_does_not_affect_settlement_or_funding() {
 
     // Change to a different registry — still no fund change.
     let registry2 = Address::generate(&env);
-    client.rebind_registry_ref(&Some(registry2.clone()));
+    client.rebind_registry_ref(&Some(registry2.clone()), &1u32);
     assert_eq!(client.get_registry_ref(), Some(registry2.clone()));
     assert_eq!(
         client.get_escrow().funded_amount,
@@ -3794,7 +3803,7 @@ fn test_registry_ref_does_not_affect_settlement_or_funding() {
     );
 
     // Clear via rebind_registry_ref(None) — still fully funded.
-    client.rebind_registry_ref(&None);
+    client.rebind_registry_ref(&None, &2u32);
     assert_eq!(client.get_registry_ref(), None);
     assert_eq!(
         client.get_escrow().funded_amount,
@@ -3803,8 +3812,8 @@ fn test_registry_ref_does_not_affect_settlement_or_funding() {
     );
 
     // Rebind once more then clear via clear_registry_ref — funded_amount unchanged.
-    client.rebind_registry_ref(&Some(registry.clone()));
-    client.clear_registry_ref();
+    client.rebind_registry_ref(&Some(registry.clone()), &3u32);
+    client.clear_registry_ref(&4u32);
     assert_eq!(client.get_registry_ref(), None);
     assert_eq!(
         client.get_escrow().funded_amount,

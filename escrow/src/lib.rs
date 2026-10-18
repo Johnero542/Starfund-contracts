@@ -3667,11 +3667,12 @@ impl StarfundEscrow {
     /// as an authority boundary in on-chain logic.
     ///
     /// # Authorization
-    /// Requires the signature of the current [`InvoiceEscrow::admin`].
+    /// Requires the signature of the current [`InvoiceEscrow::admin`] and the current admin
+    /// nonce. A successful rebind consumes `expected_nonce`.
     ///
     /// # Events
     /// Emits [`RegistryRefRebound`] with the new value (`Some(addr)` or `None` to clear).
-    pub fn rebind_registry_ref(env: Env, registry: Option<Address>) {
+    pub fn rebind_registry_ref(env: Env, registry: Option<Address>, expected_nonce: u32) {
         let escrow = Self::load_escrow_require_admin(&env);
 
         // Prevent changing off-chain reference data after any principal has been recorded.
@@ -3680,6 +3681,8 @@ impl StarfundEscrow {
             escrow.funded_amount == 0,
             EscrowError::RegistryImmutableAfterFunding,
         );
+
+        Self::consume_admin_nonce(&env, expected_nonce);
 
         match registry.clone() {
             Some(_) => {
@@ -3704,8 +3707,8 @@ impl StarfundEscrow {
     ///
     /// Convenience wrapper around `rebind_registry_ref` with `None`.
     /// Emits the same `RegistryRefRebound` event with `registry = None`.
-    pub fn clear_registry_ref(env: Env) {
-        Self::rebind_registry_ref(env, None);
+    pub fn clear_registry_ref(env: Env, expected_nonce: u32) {
+        Self::rebind_registry_ref(env, None, expected_nonce);
     }
 
     /// Returns the optional pending admin address waiting for [`StarfundEscrow::accept_admin`],

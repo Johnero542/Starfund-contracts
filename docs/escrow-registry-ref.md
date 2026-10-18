@@ -57,24 +57,25 @@ included in the `EscrowInitialized` snapshot event under the `registry` field.
 ### 2. Rebind
 
 ```
-rebind_registry_ref(registry: Option<Address>)
+rebind_registry_ref(registry: Option<Address>, expected_nonce: u32)
 ```
 
 - **Auth:** requires the signature of the current escrow admin.
+- **Replay protection:** requires the current admin nonce and consumes it on success.
 - **Effect:** writes `Some(addr)` to `DataKey::RegistryRef`, or removes the key
   when passed `None`.
 - **Event:** emits `RegistryRefRebound { name: "reg_rebind", invoice_id, registry }`.
 
-The pointer may be rebound any number of times and at any escrow status.
+The pointer may be rebound any number of times before funding begins.
 
 ### 3. Clear
 
 ```
-clear_registry_ref()
+clear_registry_ref(expected_nonce: u32)
 ```
 
-Convenience wrapper that calls `rebind_registry_ref(None)`. Behavior and
-emitted event are identical to passing `None` directly.
+Convenience wrapper that calls `rebind_registry_ref(None, expected_nonce)`.
+Behavior and emitted event are identical to passing `None` directly.
 
 ---
 

@@ -199,8 +199,8 @@ starfund-contracts/
 | `get_settlement_config` | — | Read-only bundled view of settlement configuration: `settlement_limit`, `yield_bps`, `protocol_fee_bps`, and `maturity`. Returns sensible defaults (`DEFAULT_SETTLEMENT_LIMIT`, `0`, `0`, `0`) before `init`. |
 | `get_reconciliation` | — | Read solvency position: live token balance, outstanding liability, and surplus/deficit. See [`docs/escrow-read-api.md`](docs/escrow-read-api.md). |
 
-| `rebind_registry_ref` | Admin | Set or update the off-chain registry hint (`DataKey::RegistryRef`). Emits `RegistryRefRebound`. |
-| `clear_registry_ref` | Admin | Convenience alias for `rebind_registry_ref(None)`. Clears the registry pointer. |
+| `rebind_registry_ref` | Admin | Set or update the off-chain registry hint (`DataKey::RegistryRef`) with the expected admin nonce. Emits `RegistryRefRebound`. |
+| `clear_registry_ref` | Admin | Convenience alias for `rebind_registry_ref(None, expected_nonce)`. Clears the registry pointer. |
 | `get_registry_ref` | — | Return the current registry hint, or `None` when unbound. |
 
 ---
@@ -237,9 +237,9 @@ their cached pointer without polling.
 
 1. **Init (optional bind):** `init` accepts an optional `registry: Option<Address>`.
    Passing `Some(addr)` stores the hint immediately; `None` leaves the pointer unset.
-2. **Rebind:** Admin calls `rebind_registry_ref(Some(new_addr))` to change the hint.
+2. **Rebind:** Before funding begins, admin calls `rebind_registry_ref(Some(new_addr), expected_nonce)` to change the hint.
    The `RegistryRefRebound` event fires with the new address.
-3. **Clear:** Admin calls `clear_registry_ref()` (or `rebind_registry_ref(None)`) to
+3. **Clear:** Admin calls `clear_registry_ref(expected_nonce)` (or `rebind_registry_ref(None, expected_nonce)`) to
    delete the key. The `RegistryRefRebound` event fires with `registry = None`.
 
 See [`docs/escrow-registry-ref.md`](docs/escrow-registry-ref.md) for the full lifecycle
