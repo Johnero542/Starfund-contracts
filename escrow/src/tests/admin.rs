@@ -2652,7 +2652,7 @@ fn auth_audit_fund_batch_requires_payer() {
 }
 
 #[test]
-fn rotate_payer_requires_dual_auth_and_emits_event() {
+fn rotate_payer_requires_three_party_auth_and_emits_event() {
     use soroban_sdk::testutils::Events as _;
 
     let env = Env::default();
@@ -2661,14 +2661,26 @@ fn rotate_payer_requires_dual_auth_and_emits_event() {
     default_init(&client, &env, &admin, &sme);
 
     let first_payer = Address::generate(&env);
-    client.rotate_payer(&first_payer);
+    client.rotate_payer(&first_payer, &0u32);
 
     let new_payer = Address::generate(&env);
-    let args = soroban_sdk::Vec::from_array(&env, [new_payer.clone().into_val(&env)]);
+    let args = soroban_sdk::Vec::from_array(
+        &env,
+        [new_payer.clone().into_val(&env), 1u32.into_val(&env)],
+    );
     let events_before = env.events().all().events().len();
     env.mock_auths(&[
         soroban_sdk::testutils::MockAuth {
             address: &first_payer,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "rotate_payer",
+                args: args.clone(),
+                sub_invokes: &[],
+            },
+        },
+        soroban_sdk::testutils::MockAuth {
+            address: &new_payer,
             invoke: &soroban_sdk::testutils::MockAuthInvoke {
                 contract: &client.address,
                 fn_name: "rotate_payer",
@@ -2687,7 +2699,7 @@ fn rotate_payer_requires_dual_auth_and_emits_event() {
         },
     ]);
 
-    let rotated = client.rotate_payer(&new_payer);
+    let rotated = client.rotate_payer(&new_payer, &1u32);
 
     assert_eq!(rotated.payer, new_payer);
     let events = env.events().all().events();
@@ -2704,26 +2716,40 @@ fn rotate_payer_requires_dual_auth_and_emits_event() {
 
 #[test]
 #[should_panic]
-fn rotate_payer_rejects_admin_only_auth() {
+fn rotate_payer_rejects_missing_new_payer_auth() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, admin, sme) = setup(&env);
     default_init(&client, &env, &admin, &sme);
 
     let current_payer = Address::generate(&env);
-    client.rotate_payer(&current_payer);
+    client.rotate_payer(&current_payer, &0u32);
     let new_payer = Address::generate(&env);
-    let args = soroban_sdk::Vec::from_array(&env, [new_payer.clone().into_val(&env)]);
-    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
-        address: &admin,
-        invoke: &soroban_sdk::testutils::MockAuthInvoke {
-            contract: &client.address,
-            fn_name: "rotate_payer",
-            args,
-            sub_invokes: &[],
+    let args = soroban_sdk::Vec::from_array(
+        &env,
+        [new_payer.clone().into_val(&env), 1u32.into_val(&env)],
+    );
+    env.mock_auths(&[
+        soroban_sdk::testutils::MockAuth {
+            address: &current_payer,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "rotate_payer",
+                args: args.clone(),
+                sub_invokes: &[],
+            },
         },
-    }]);
-    client.rotate_payer(&new_payer);
+        soroban_sdk::testutils::MockAuth {
+            address: &admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "rotate_payer",
+                args,
+                sub_invokes: &[],
+            },
+        },
+    ]);
+    client.rotate_payer(&new_payer, &1u32);
 }
 
 #[test]
@@ -2735,9 +2761,12 @@ fn rotate_payer_rejects_payer_only_auth() {
     default_init(&client, &env, &admin, &sme);
 
     let current_payer = Address::generate(&env);
-    client.rotate_payer(&current_payer);
+    client.rotate_payer(&current_payer, &0u32);
     let new_payer = Address::generate(&env);
-    let args = soroban_sdk::Vec::from_array(&env, [new_payer.clone().into_val(&env)]);
+    let args = soroban_sdk::Vec::from_array(
+        &env,
+        [new_payer.clone().into_val(&env), 1u32.into_val(&env)],
+    );
     env.mock_auths(&[soroban_sdk::testutils::MockAuth {
         address: &current_payer,
         invoke: &soroban_sdk::testutils::MockAuthInvoke {
@@ -2747,7 +2776,34 @@ fn rotate_payer_rejects_payer_only_auth() {
             sub_invokes: &[],
         },
     }]);
-    client.rotate_payer(&new_payer);
+    client.rotate_payer(&new_payer, &1u32);
+}
+
+#[test]
+#[should_panic]
+fn rotate_payer_rejects_admin_only_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    let current_payer = Address::generate(&env);
+    client.rotate_payer(&current_payer, &0u32);
+    let new_payer = Address::generate(&env);
+    let args = soroban_sdk::Vec::from_array(
+        &env,
+        [new_payer.clone().into_val(&env), 1u32.into_val(&env)],
+    );
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &admin,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "rotate_payer",
+            args,
+            sub_invokes: &[],
+        },
+    }]);
+    client.rotate_payer(&new_payer, &1u32);
 }
 
 #[test]
@@ -2758,7 +2814,7 @@ fn rotate_payer_rejects_same_payer() {
     default_init(&client, &env, &admin, &sme);
 
     assert_contract_error(
-        client.try_rotate_payer(&admin),
+        client.try_rotate_payer(&admin, &0u32),
         EscrowError::NewPayerSameAsCurrent,
     );
 }
@@ -2770,7 +2826,7 @@ fn rotate_payer_rejects_terminal_escrow() {
     let new_payer = Address::generate(&env);
 
     assert_contract_error(
-        client.try_rotate_payer(&new_payer),
+        client.try_rotate_payer(&new_payer, &0u32),
         EscrowError::PayerRotationNotOpen,
     );
 }
@@ -2785,7 +2841,7 @@ fn rotate_payer_rejects_active_legal_hold() {
     let new_payer = Address::generate(&env);
 
     assert_contract_error(
-        client.try_rotate_payer(&new_payer),
+        client.try_rotate_payer(&new_payer, &0u32),
         EscrowError::LegalHoldBlocksPayerRotation,
     );
 }

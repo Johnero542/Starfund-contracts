@@ -4027,6 +4027,7 @@ impl StarfundEscrow {
 
         escrow.payer.require_auth();
         escrow.admin.require_auth();
+        new_payer.require_auth();
         Self::consume_admin_nonce(&env, expected_nonce);
 
         let prior_payer = escrow.payer.clone();
