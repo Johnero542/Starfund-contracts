@@ -146,6 +146,18 @@ Emitted when the SME finalizes the escrow after maturity.
 }
 ```
 
+### `EscrowPartialSettle`
+Emitted when the SME or admin closes funding early and the escrow transitions from open to funded.
+
+**Topics:**
+1. `part_set` (Symbol)
+2. `invoice_id` (Symbol)
+
+**Data Payload:**
+- `funded_amount` (`i128`) — principal recorded when funding was closed.
+- `partial_settled_at_ledger_timestamp` (`u64`) — ledger timestamp written to
+  `DataKey::PartialSettledAt` and returned by `get_partial_settled_at`.
+
 ### `InvestorPayoutClaimed`
 Emitted when an investor records their payout claim.
 

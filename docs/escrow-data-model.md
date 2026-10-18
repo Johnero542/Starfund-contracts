@@ -57,6 +57,7 @@ with `unwrap_or(0)`.
 | `PrimaryAttestationHash` | `BytesN<32>` | `bind_primary_attestation_hash` | Single-set; panics on second call |
 | `AttestationAppendLog` | `Vec<BytesN<32>>` | `append_attestation_digest` | Bounded by `MAX_ATTESTATION_APPEND_ENTRIES` (32) |
 | `SettledAt` | `u64` | `settle` on status 1→2 transition | Write-once; `None` before settlement; legacy-safe |
+| `PartialSettledAt` | `u64` | `partial_settle` on status 0→1 transition | Write-once; `None` unless funding was closed early; legacy-safe |
 | `FundingDeadline` | `u64` | `init` (when `funding_deadline` arg is `Some`) | Ledger timestamp; new funds rejected after this |
 
 ### Per-address investor keys in persistent storage

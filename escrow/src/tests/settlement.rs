@@ -1577,6 +1577,7 @@ fn test_partial_settle_sme_happy_path() {
     client.fund(&investor, &(TARGET / 2));
 
     // SME settles early
+    env.ledger().set_timestamp(1_234);
     client.partial_settle(&sme);
 
     let escrow = client.get_escrow();
@@ -1585,6 +1586,8 @@ fn test_partial_settle_sme_happy_path() {
         "Status must be 1 (funded/settleable) after partial_settle"
     );
     assert_eq!(escrow.funded_amount, TARGET / 2);
+    assert_eq!(client.get_partial_settled_at(), Some(1_234));
+    assert_eq!(client.get_settled_at(), None);
 }
 
 #[test]

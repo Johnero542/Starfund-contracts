@@ -1550,6 +1550,9 @@ pub enum DataKey {
     /// [`StarfundEscrow::get_allowlisted_investors_count`] is `O(1)` and never
     /// scans persistent storage.
     AllowlistCount,
+    /// Ledger timestamp recorded when `partial_settle` closes funding early.
+    /// Absent ⇒ funding has not been closed through `partial_settle`.
+    PartialSettledAt,
 }
 
 // --- Data types ---
@@ -2326,6 +2329,8 @@ pub struct EscrowPartialSettle {
     #[topic]
     pub invoice_id: Symbol,
     pub funded_amount: i128,
+    /// Ledger timestamp when early funding closure was recorded.
+    pub partial_settled_at_ledger_timestamp: u64,
 }
 
 /// Emitted exactly once when the escrow transitions from **open** (status 0) to **funded**
@@ -4756,6 +4761,12 @@ impl StarfundEscrow {
     /// - `None` ΓÇö escrow is not yet settled, or is a legacy instance predating this key.
     pub fn get_settled_at(env: Env) -> Option<u64> {
         env.storage().instance().get(&DataKey::SettledAt)
+    }
+
+    /// Returns the ledger timestamp at which `partial_settle` closed funding, or [`None`]
+    /// when funding was not closed through that entrypoint.
+    pub fn get_partial_settled_at(env: Env) -> Option<u64> {
+        env.storage().instance().get(&DataKey::PartialSettledAt)
     }
 
     /// Effective yield (bps) for this investor after their **first** deposit; later [`StarfundEscrow::fund`]
@@ -7333,6 +7344,8 @@ impl StarfundEscrow {
             EscrowError::PartialSettleNoFunds,
         );
 
+        let now = env.ledger().timestamp();
+
         // Transition to funded status early.
         escrow.status = 1;
 
@@ -7354,11 +7367,15 @@ impl StarfundEscrow {
         }
 
         env.storage().instance().set(&DataKey::Escrow, &escrow);
+        env.storage()
+            .instance()
+            .set(&DataKey::PartialSettledAt, &now);
 
         EscrowPartialSettle {
             name: symbol_short!("part_set"),
             invoice_id: escrow.invoice_id.clone(),
             funded_amount: escrow.funded_amount,
+            partial_settled_at_ledger_timestamp: now,
         }
         .publish(&env);
 
