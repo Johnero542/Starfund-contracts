@@ -207,9 +207,9 @@ starfund-contracts/
 
 ## Off-chain registry-reference pointer
 
-The escrow stores an optional `Option<Address>` under `DataKey::RegistryRef` as a
-**discoverability hint** for off-chain indexers. It is set at `init` (optional) and
-can be updated or cleared at any time by the admin via `rebind_registry_ref` /
+The escrow stores an `Address` under `DataKey::RegistryRef` as a **discoverability hint**
+for off-chain indexers; an absent key represents `None`. It is set at `init` (optional)
+and can be updated or cleared before funding by the admin via `rebind_registry_ref` /
 `clear_registry_ref`.
 
 ### Non-authority guarantee

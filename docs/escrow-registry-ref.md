@@ -62,8 +62,8 @@ rebind_registry_ref(registry: Option<Address>, expected_nonce: u32)
 
 - **Auth:** requires the signature of the current escrow admin.
 - **Replay protection:** requires the current admin nonce and consumes it on success.
-- **Effect:** writes `Some(addr)` to `DataKey::RegistryRef`, or removes the key
-  when passed `None`.
+- **Effect:** stores `addr` as an `Address` under `DataKey::RegistryRef`, or removes
+  the key when passed `None`.
 - **Event:** emits `RegistryRefRebound { name: "reg_rebd", invoice_id, registry }`.
 
 The pointer may be rebound any number of times before funding begins.

@@ -3684,11 +3684,11 @@ impl StarfundEscrow {
 
         Self::consume_admin_nonce(&env, expected_nonce);
 
-        match registry.clone() {
-            Some(_) => {
+        match registry.as_ref() {
+            Some(registry_ref) => {
                 env.storage()
                     .instance()
-                    .set(&DataKey::RegistryRef, &registry);
+                    .set(&DataKey::RegistryRef, registry_ref);
             }
             None => {
                 env.storage().instance().remove(&DataKey::RegistryRef);
