@@ -52,6 +52,12 @@ Codes 36–41 (SEP-41 transfer-wrapper guards, also raised by `withdraw` and
 `claim_investor_payout`) are documented in
 [`docs/escrow-token-safety.md`](escrow-token-safety.md).
 
+## Initialization Errors
+
+| Error Name | Code | Description |
+|---|---|---|
+| `RoleAddressesMustBeDistinct` | 268 | `init` assigned the same address to two or more of the admin, SME, and treasury roles. |
+
 ## Unfund Errors
 
 | Error Name | Code | Description |

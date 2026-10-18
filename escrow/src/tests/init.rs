@@ -43,6 +43,48 @@ fn test_init_stores_escrow() {
 }
 
 #[test]
+fn test_init_rejects_duplicate_role_addresses() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = deploy(&env);
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let funding_token = Address::generate(&env);
+
+    for (admin_arg, sme_arg, treasury_arg) in [
+        (&admin, &admin, &treasury),
+        (&admin, &sme, &admin),
+        (&admin, &sme, &sme),
+    ] {
+        assert_contract_error(
+            client.try_init(
+                admin_arg,
+                &soroban_sdk::String::from_str(&env, "ROLE01"),
+                sme_arg,
+                &TARGET,
+                &800i64,
+                &0u64,
+                &funding_token,
+                &None,
+                treasury_arg,
+                &None,
+                &None,
+                &None,
+                &None,
+                &None,
+                &None,
+                &None,
+                &None,
+                &None::<i64>,
+                &None::<u32>,
+            ),
+            EscrowError::RoleAddressesMustBeDistinct,
+        );
+    }
+}
+
+#[test]
 fn test_init_stores_keyed_invoice_and_lists_it() {
     let env = Env::default();
     let (client, admin, sme) = setup(&env);

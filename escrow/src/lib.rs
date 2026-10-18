@@ -1070,6 +1070,8 @@ pub enum EscrowError {
     NothingToWithdraw = 266,
     /// [`StarfundEscrow::cancel_funding`] called while a dispute remains active.
     DisputeBlocksCancelFunding = 267,
+    /// [`StarfundEscrow::init`] assigned the same address to two or more distinct roles.
+    RoleAddressesMustBeDistinct = 268,
     /// [`StarfundEscrow::partial_settle`] called while `funded_amount == 0`.
     ///
     /// Closing funding early on an escrow with no investor contributions would write a
@@ -3457,6 +3459,11 @@ impl StarfundEscrow {
     ) -> InvoiceEscrow {
         admin.require_auth();
 
+        ensure(
+            &env,
+            admin != sme_address && admin != treasury && sme_address != treasury,
+            EscrowError::RoleAddressesMustBeDistinct,
+        );
         ensure(&env, amount > 0, EscrowError::AmountMustBePositive);
         ensure(
             &env,
