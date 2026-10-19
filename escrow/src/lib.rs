@@ -2751,6 +2751,25 @@ pub struct InvestorPayoutClaimed {
 }
 
 #[contractevent]
+pub struct FeeScheduleSubmitted {
+    #[topic]
+    pub name: Symbol,
+    #[topic]
+    pub invoice_id: Symbol,
+    pub schedule: FeeSchedule,
+}
+
+#[contractevent]
+pub struct FeeScheduleActivated {
+    #[topic]
+    pub name: Symbol,
+    #[topic]
+    pub invoice_id: Symbol,
+    pub schedule: FeeSchedule,
+    pub previous: Option<FeeSchedule>,
+}
+
+#[contractevent]
 pub struct FundingCancelled {
     #[topic]
     pub name: Symbol,
@@ -2998,7 +3017,8 @@ impl StarfundEscrow {
     /// Admin-authorized submission of a new pending fee schedule.
     ///
     /// The schedule must be in-bounds and its activation ledger must lie strictly
-    /// in the future. Duplicate pending schedules are idempotent.
+    /// in the future. Duplicate pending schedules are idempotent. A new pending
+    /// schedule emits [`FeeScheduleSubmitted`].
     pub fn submit_fee_schedule(env: Env, schedule: FeeSchedule) {
         let escrow: InvoiceEscrow = env
             .storage()
@@ -3035,12 +3055,19 @@ impl StarfundEscrow {
         env.storage()
             .instance()
             .set(&FeeScheduleStorageKey::Pending, &schedule);
+        FeeScheduleSubmitted {
+            name: symbol_short!("fee_sub"),
+            invoice_id: escrow.invoice_id,
+            schedule,
+        }
+        .publish(&env);
     }
 
     /// Promotes a pending schedule to active when its activation ledger is reached.
     ///
     /// This is intentionally callable by anyone; it only applies a previously
-    /// admin-authorized schedule and records the previous active schedule.
+    /// admin-authorized schedule and records the previous active schedule. A
+    /// promotion emits [`FeeScheduleActivated`].
     pub fn activate_fee_schedule(env: Env) -> bool {
         let current_ledger = env.ledger().sequence();
         let pending: Option<FeeSchedule> = env
@@ -3060,6 +3087,13 @@ impl StarfundEscrow {
                 env.storage()
                     .instance()
                     .remove(&FeeScheduleStorageKey::Pending);
+                FeeScheduleActivated {
+                    name: symbol_short!("fee_act"),
+                    invoice_id: Self::get_escrow(env.clone()).invoice_id,
+                    schedule: p,
+                    previous,
+                }
+                .publish(&env);
                 return true;
             }
         }

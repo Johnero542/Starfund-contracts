@@ -49,7 +49,7 @@ version and reconcile against this document, using the
 
 ## Event Catalog
 
-The current contract defines 20 event structs.
+The current contract defines 22 event structs.
 
 | Rust event | `name` symbol | Entrypoint(s) |
 |---|---:|---|
@@ -67,6 +67,8 @@ The current contract defines 20 event structs.
 | `CollateralRecordedEvt` | `coll_rec` | `record_sme_collateral_commitment` |
 | `SmeWithdrew` | `sme_wd` | `withdraw` |
 | `InvestorPayoutClaimed` | `inv_claim` | `claim_investor_payout` |
+| `FeeScheduleSubmitted` | `fee_sub` | `submit_fee_schedule` |
+| `FeeScheduleActivated` | `fee_act` | `activate_fee_schedule` |
 | `FundingCancelled` | `fund_can` | `cancel_funding` |
 | `InvestorRefundedEvt` | `refunded` | `refund` |
 | `TreasuryDustSwept` | `dust_sw` | `sweep_terminal_dust` |
@@ -374,6 +376,43 @@ Data:
 | Field | Type |
 |---|---|
 | `payout` | `i128` |
+
+### `FeeScheduleSubmitted`
+
+Emitted after a new pending schedule is stored. An idempotent resubmission emits no event.
+
+Topics:
+
+| Index | Field | Type | Value |
+|---:|---|---|---|
+| 0 | fixed event topic | `Symbol` | `fee_schedule_submitted` |
+| 1 | `name` | `Symbol` | `fee_sub` |
+| 2 | `invoice_id` | `Symbol` | Escrow invoice id |
+
+Data:
+
+| Field | Type |
+|---|---|
+| `schedule` | `FeeSchedule` |
+
+### `FeeScheduleActivated`
+
+Emitted after a pending schedule is promoted to active at or after its activation ledger.
+
+Topics:
+
+| Index | Field | Type | Value |
+|---:|---|---|---|
+| 0 | fixed event topic | `Symbol` | `fee_schedule_activated` |
+| 1 | `name` | `Symbol` | `fee_act` |
+| 2 | `invoice_id` | `Symbol` | Escrow invoice id |
+
+Data:
+
+| Field | Type |
+|---|---|
+| `schedule` | `FeeSchedule` |
+| `previous` | `Option<FeeSchedule>` |
 
 ### `FundingCancelled`
 

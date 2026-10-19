@@ -69,6 +69,7 @@ mod coverage;
 mod external_calls;
 mod external_calls_mocked;
 mod funding;
+mod fee_schedules;
 mod init;
 // `integration` (integration.rs) is disabled: it was written against a contract
 // API (close-escrow, admin-transfer, collateral events) and an older SDK event
