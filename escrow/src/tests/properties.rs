@@ -2855,3 +2855,157 @@ fn slots_cap_exactly_hit_remaining_is_zero() {
     );
     assert_slots_invariant(&client, "cap exactly hit");
 }
+
+// ── #242: unfund / re-fund cycle accounting invariant ─────────────────────────
+//
+// Property: After any sequence of fund / full-unfund / re-fund operations,
+//   UniqueFunderCount == count(contributions > 0)
+// and
+//   escrow.funded_amount == Σ(contributions)
+//
+// A "full unfund" zeros the investor's contribution and decrements UniqueFunderCount.
+// A subsequent re-fund should add them back as a new unique funder, incrementing the
+// count again. This exercises the DataKey::InvestorIndex deduplication invariants.
+
+proptest! {
+    #[test]
+    fn prop_unfund_refund_cycle_accounting(
+        // 2-4 investors each running up to 5 fund/unfund/re-fund steps.
+        n_investors in 2usize..=4usize,
+        // Random amounts for each of up to 5 rounds per investor.
+        seed in 0u64..u64::MAX,
+        n_rounds in 1usize..=5usize,
+    ) {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let sme = Address::generate(&env);
+        let token = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let client = deploy(&env);
+
+        // Use a large target so status never flips to 1 (funded) during the cycle.
+        let target: i128 = 1_000_000_000_000i128;
+
+        client.init(
+            &admin,
+            &soroban_sdk::String::from_str(&env, "UNFCYC"),
+            &sme,
+            &target,
+            &500i64,
+            &0u64,
+            &token,
+            &None,
+            &treasury,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None::<i64>,
+            &None::<u32>,
+        );
+
+        let investors: Vec<Address> = (0..n_investors)
+            .map(|_| Address::generate(&env))
+            .collect();
+
+        // Deterministic amounts from the proptest-provided seed.
+        let mut rng = SplitMix64::new(seed);
+
+        // Track expected per-investor contributions in the off-chain model.
+        let mut expected_contribs: Vec<i128> = vec![0i128; n_investors];
+
+        for _round in 0..n_rounds {
+            for i in 0..n_investors {
+                // Ensure escrow is still open before operating.
+                if client.get_escrow().status != 0 {
+                    break;
+                }
+
+                let inv = investors[i].clone();
+                let current = expected_contribs[i];
+
+                // --- Phase 1: fund if not already funded (or re-fund after full unfund) ---
+                let fund_amt = rng.gen_i128_inclusive(1, 10_000_000);
+                client.fund(&inv, &fund_amt);
+                expected_contribs[i] = current + fund_amt;
+
+                // --- Invariant check after fund ---
+                let actual_funded: i128 = client.get_escrow().funded_amount;
+                let expected_funded: i128 = expected_contribs.iter().sum();
+                prop_assert_eq!(
+                    actual_funded, expected_funded,
+                    "funded_amount must equal sum of contributions after fund (round={_round}, investor={i})"
+                );
+
+                let unique_count = client.get_unique_funder_count();
+                let positive_count = expected_contribs.iter().filter(|&&c| c > 0).count() as u32;
+                prop_assert_eq!(
+                    unique_count, positive_count,
+                    "UniqueFunderCount must equal count of positive contributions after fund"
+                );
+
+                // --- Phase 2: fully unfund this investor ---
+                if expected_contribs[i] > 0 {
+                    client.unfund(&inv, &expected_contribs[i]);
+                    expected_contribs[i] = 0;
+
+                    let actual_funded_after: i128 = client.get_escrow().funded_amount;
+                    let expected_funded_after: i128 = expected_contribs.iter().sum();
+                    prop_assert_eq!(
+                        actual_funded_after, expected_funded_after,
+                        "funded_amount must equal sum after full unfund (round={_round}, investor={i})"
+                    );
+
+                    let unique_count_after = client.get_unique_funder_count();
+                    let positive_count_after = expected_contribs.iter().filter(|&&c| c > 0).count() as u32;
+                    prop_assert_eq!(
+                        unique_count_after, positive_count_after,
+                        "UniqueFunderCount must equal count of positive contributions after full unfund"
+                    );
+                }
+
+                // --- Phase 3: re-fund this investor ---
+                let refund_amt = rng.gen_i128_inclusive(1, 10_000_000);
+                client.fund(&inv, &refund_amt);
+                expected_contribs[i] += refund_amt;
+
+                // --- Invariant check after re-fund ---
+                let actual_funded_refund: i128 = client.get_escrow().funded_amount;
+                let expected_funded_refund: i128 = expected_contribs.iter().sum();
+                prop_assert_eq!(
+                    actual_funded_refund, expected_funded_refund,
+                    "funded_amount must equal sum of contributions after re-fund (round={_round}, investor={i})"
+                );
+
+                let unique_count_refund = client.get_unique_funder_count();
+                let positive_count_refund = expected_contribs.iter().filter(|&&c| c > 0).count() as u32;
+                prop_assert_eq!(
+                    unique_count_refund, positive_count_refund,
+                    "UniqueFunderCount must equal count of positive contributions after re-fund"
+                );
+            }
+        }
+
+        // Final global invariant: funded_amount == Σ contributions.
+        let final_funded: i128 = client.get_escrow().funded_amount;
+        let final_sum: i128 = expected_contribs.iter().sum();
+        prop_assert_eq!(
+            final_funded, final_sum,
+            "final funded_amount must equal sum of all contributions"
+        );
+
+        // Final unique funder count must equal positive-contribution count.
+        let final_unique = client.get_unique_funder_count();
+        let final_positive = expected_contribs.iter().filter(|&&c| c > 0).count() as u32;
+        prop_assert_eq!(
+            final_unique, final_positive,
+            "final UniqueFunderCount must equal count of investors with positive balances"
+        );
+    }
+}

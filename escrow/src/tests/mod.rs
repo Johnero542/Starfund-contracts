@@ -63,6 +63,7 @@ mod auth_matrix;
 mod cap_validation;
 // The collateral (boundary/config-view/limit-setter), settlement_limit, and admin_recovery test
 // modules have no source file in this tree, so they are intentionally not declared here.
+mod collateral_batch_tests;
 mod dispute_release;
 #[rustfmt::skip]
 mod coverage;
