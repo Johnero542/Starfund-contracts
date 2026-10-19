@@ -6803,6 +6803,52 @@ fn test_extend_funding_deadline_rejects_non_open_status() {
     );
 }
 
+#[test]
+fn test_extend_funding_deadline_rejects_settled_status() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, admin, sme) = setup(&env);
+    let initial = env.ledger().timestamp() + 100;
+    init_with_funding_deadline(&env, &client, &admin, &sme, initial, 0);
+
+    let token = client.get_funding_token();
+    let investor = Address::generate(&env);
+    StellarAssetClient::new(&env, &token).mint(&investor, &TARGET);
+    client.fund(&investor, &TARGET);
+    client.settle();
+    assert_eq!(client.get_escrow().status, 2);
+
+    assert_contract_error(
+        client.try_extend_funding_deadline(&(initial + 50)),
+        EscrowError::FundingDeadlineUpdateNotOpen,
+    );
+    assert_eq!(client.get_funding_deadline(), Some(initial));
+}
+
+#[test]
+fn test_extend_funding_deadline_rejects_withdrawn_status() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, admin, sme) = setup(&env);
+    let initial = env.ledger().timestamp() + 100;
+    init_with_funding_deadline(&env, &client, &admin, &sme, initial, 0);
+
+    let token = client.get_funding_token();
+    let investor = Address::generate(&env);
+    StellarAssetClient::new(&env, &token).mint(&investor, &TARGET);
+    client.fund(&investor, &TARGET);
+    client.withdraw();
+    assert_eq!(client.get_escrow().status, 3);
+
+    assert_contract_error(
+        client.try_extend_funding_deadline(&(initial + 50)),
+        EscrowError::FundingDeadlineUpdateNotOpen,
+    );
+    assert_eq!(client.get_funding_deadline(), Some(initial));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests for fund_batch duplicate-investor rejection (Issue #643)
 // ─────────────────────────────────────────────────────────────────────────────
