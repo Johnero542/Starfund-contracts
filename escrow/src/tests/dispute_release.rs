@@ -148,6 +148,55 @@ fn close_during_dispute_is_blocked() {
 }
 
 #[test]
+fn cancelled_escrow_cannot_close_until_refunds_clear_its_balance() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let sac = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token = sac.address();
+    let sac_admin = StellarAssetClient::new(&env, &token);
+    let (client, admin, sme) = setup(&env);
+    let (_, treasury) = free_addresses(&env);
+    client.init(
+        &admin,
+        &String::from_str(&env, "CLOSE-CANCELLED"),
+        &sme,
+        &1_000i128,
+        &100i64,
+        &0u64,
+        &token,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+
+    let investor = Address::generate(&env);
+    sac_admin.mint(&investor, &500i128);
+    client.fund(&investor, &500i128);
+    client.cancel_funding(&0u32);
+
+    let result = client.try_close_escrow();
+    match result {
+        Err(Err(InvokeError::Contract(code))) => {
+            assert_eq!(code, crate::CloseError::ActiveBalance as u32);
+        }
+        other => panic!("expected active balance error, got {other:?}"),
+    }
+
+    client.refund(&investor);
+    client.close_escrow();
+    assert!(client.get_closure_metadata().is_some());
+}
+
+#[test]
 fn dispute_opened_during_release_flow_blocks_release() {
     let (_, client, admin, _) = funded_client();
     client.open_dispute(&admin);
