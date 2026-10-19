@@ -8220,12 +8220,8 @@ impl StarfundEscrow {
                 Self::get_persistent_investor_effective_yield(&env, investor.clone())
                     .unwrap_or(escrow.yield_bps);
 
-            let payout = calculate_investor_payout(
-                &env,
-                contribution,
-                total_principal,
-                effective_yield_bps,
-            );
+            let payout =
+                calculate_investor_payout(&env, contribution, total_principal, effective_yield_bps);
 
             total_liability = total_liability
                 .checked_add(payout)
