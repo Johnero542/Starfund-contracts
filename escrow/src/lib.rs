@@ -1550,6 +1550,9 @@ pub enum DataKey {
     /// [`StarfundEscrow::get_allowlisted_investors_count`] is `O(1)` and never
     /// scans persistent storage.
     AllowlistCount,
+    /// Non-consumed callback nonces, used to remove pending callback contexts on cancellation.
+    /// Absent on legacy instances; reconstructed from [`DataKey::CallbackNonce`] when needed.
+    PendingCallbackNonces,
 }
 
 // --- Data types ---
@@ -9185,6 +9188,19 @@ impl StarfundEscrow {
 
         guard_status_eq(&env, escrow.status, 0, EscrowError::CancelFundingNotOpen);
 
+        let pending_callbacks = Self::pending_callback_nonces(&env);
+        let mut index = 0;
+        while index < pending_callbacks.len() {
+            let nonce = pending_callbacks.get(index).unwrap();
+            env.storage()
+                .instance()
+                .remove(&DataKey::CallbackContext(nonce));
+            index += 1;
+        }
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingCallbackNonces);
+
         escrow.status = 4;
         env.storage().instance().set(&DataKey::Escrow, &escrow);
 
@@ -9578,6 +9594,12 @@ impl StarfundEscrow {
             .checked_add(1)
             .unwrap_or_else(|| fail(&env, EscrowError::FundedAmountOverflow));
 
+        let mut pending_callbacks = Self::pending_callback_nonces(&env);
+        pending_callbacks.push_back(next_nonce);
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingCallbackNonces, &pending_callbacks);
+
         env.storage()
             .instance()
             .set(&DataKey::CallbackNonce, &next_nonce);
@@ -9674,6 +9696,7 @@ impl StarfundEscrow {
         env.storage()
             .instance()
             .set(&DataKey::CallbackContext(nonce), &context);
+        Self::remove_pending_callback_nonce(&env, nonce);
 
         CallbackExecutedEvent {
             name: symbol_short!("cb_exec"),
@@ -9712,6 +9735,48 @@ impl StarfundEscrow {
             .instance()
             .get(&DataKey::CallbackContext(nonce));
         context.map(|c| c.consumed).unwrap_or(false)
+    }
+
+    fn pending_callback_nonces(env: &Env) -> Vec<u64> {
+        if let Some(pending) = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingCallbackNonces)
+        {
+            return pending;
+        }
+
+        let mut pending = Vec::new(env);
+        let last_nonce: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CallbackNonce)
+            .unwrap_or(0);
+        for nonce in 1..=last_nonce {
+            let context: Option<CallbackContext> = env
+                .storage()
+                .instance()
+                .get(&DataKey::CallbackContext(nonce));
+            if context.map(|context| !context.consumed).unwrap_or(false) {
+                pending.push_back(nonce);
+            }
+        }
+        pending
+    }
+
+    fn remove_pending_callback_nonce(env: &Env, nonce: u64) {
+        let mut pending = Self::pending_callback_nonces(env);
+        let mut index = 0;
+        while index < pending.len() {
+            if pending.get(index) == Some(nonce) {
+                pending.remove(index);
+                break;
+            }
+            index += 1;
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingCallbackNonces, &pending);
     }
 }
 
@@ -9907,68 +9972,3 @@ fn register_mock_token_if_needed(env: &Env, token_addr: &Address) {
         env.register_at(token_addr, DefaultMockToken, ());
     }
 }
-    /// Non-consumed callback nonces, used to remove pending callback contexts on cancellation.
-    /// Absent on legacy instances; reconstructed from [`DataKey::CallbackNonce`] when needed.
-    PendingCallbackNonces,
-        let pending_callbacks = Self::pending_callback_nonces(&env);
-        let mut index = 0;
-        while index < pending_callbacks.len() {
-            let nonce = pending_callbacks.get(index).unwrap();
-            env.storage()
-                .instance()
-                .remove(&DataKey::CallbackContext(nonce));
-            index += 1;
-        }
-        env.storage()
-            .instance()
-            .remove(&DataKey::PendingCallbackNonces);
-
-        let mut pending_callbacks = Self::pending_callback_nonces(&env);
-        pending_callbacks.push_back(next_nonce);
-        env.storage()
-            .instance()
-            .set(&DataKey::PendingCallbackNonces, &pending_callbacks);
-
-        Self::remove_pending_callback_nonce(&env, nonce);
-
-    fn pending_callback_nonces(env: &Env) -> Vec<u64> {
-        if let Some(pending) = env
-            .storage()
-            .instance()
-            .get(&DataKey::PendingCallbackNonces)
-        {
-            return pending;
-        }
-
-        let mut pending = Vec::new(env);
-        let last_nonce: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::CallbackNonce)
-            .unwrap_or(0);
-        for nonce in 1..=last_nonce {
-            let context: Option<CallbackContext> = env
-                .storage()
-                .instance()
-                .get(&DataKey::CallbackContext(nonce));
-            if context.map(|context| !context.consumed).unwrap_or(false) {
-                pending.push_back(nonce);
-            }
-        }
-        pending
-    }
-
-    fn remove_pending_callback_nonce(env: &Env, nonce: u64) {
-        let mut pending = Self::pending_callback_nonces(env);
-        let mut index = 0;
-        while index < pending.len() {
-            if pending.get(index) == Some(nonce) {
-                pending.remove(index);
-                break;
-            }
-            index += 1;
-        }
-        env.storage()
-            .instance()
-            .set(&DataKey::PendingCallbackNonces, &pending);
-    }
