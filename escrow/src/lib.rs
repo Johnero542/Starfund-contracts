@@ -1070,6 +1070,18 @@ pub enum EscrowError {
     NothingToWithdraw = 266,
     /// [`StarfundEscrow::cancel_funding`] called while a dispute remains active.
     DisputeBlocksCancelFunding = 267,
+    /// [`StarfundEscrow::upgrade`] called while an operational pause is active.
+    PauseBlocksUpgrade = 268,
+    /// [`StarfundEscrow::upgrade`] called while a legal hold is active.
+    LegalHoldBlocksUpgrade = 269,
+    /// [`StarfundEscrow::upgrade`] received an all-zeros WASM hash.
+    InvalidWasmHash = 270,
+    /// [`StarfundEscrow::propose_admin`] nominated the contract address as successor.
+    ProposedAdminIsContractAddress = 271,
+    /// [`StarfundEscrow::migrate`] called while an operational pause is active.
+    PauseBlocksMigrate = 272,
+    /// [`StarfundEscrow::migrate`] called while a legal hold is active.
+    LegalHoldBlocksMigrate = 273,
     /// [`StarfundEscrow::partial_settle`] called while `funded_amount == 0`.
     ///
     /// Closing funding early on an escrow with no investor contributions would write a
@@ -6841,6 +6853,20 @@ impl StarfundEscrow {
         Self::load_escrow_require_admin(&env);
         Self::consume_admin_nonce(&env, expected_nonce);
 
+        // Check operational pause is not active (issue #250)
+        if let Some(pause_state) = Self::get_pause_state(env.clone()) {
+            if pause_state.active != 0 {
+                fail(&env, EscrowError::PauseBlocksMigrate)
+            }
+        }
+
+        // Check legal hold is not active (issue #250)
+        ensure(
+            &env,
+            !Self::legal_hold_active(&env),
+            EscrowError::LegalHoldBlocksMigrate,
+        );
+
         let stored: u32 = env.storage().instance().get(&DataKey::Version).unwrap_or(0);
 
         ensure(
@@ -6856,6 +6882,10 @@ impl StarfundEscrow {
             // To add one: implement the transformation here, call
             //   env.storage().instance().set(&DataKey::Version, &NEW_VERSION);
             // and return NEW_VERSION before reaching this typed error.
+            //
+            // POST-MIGRATION SCHEMA VERIFICATION (issue #250):
+            // After implementing migration logic, add schema integrity checks to validate
+            // that all migrated ledger entries conform to the target version schema.
             fail(&env, EscrowError::NoMigrationPath)
         }
     }
@@ -6882,6 +6912,29 @@ impl StarfundEscrow {
         // Auth first — matches migrate() ordering
         let escrow = Self::load_escrow_require_admin(&env);
         Self::consume_admin_nonce(&env, expected_nonce);
+
+        // Check operational pause is not active (issue #249)
+        if let Some(pause_state) = Self::get_pause_state(env.clone()) {
+            if pause_state.active != 0 {
+                fail(&env, EscrowError::PauseBlocksUpgrade)
+            }
+        }
+
+        // Check legal hold is not active (issue #249)
+        ensure(
+            &env,
+            !Self::legal_hold_active(&env),
+            EscrowError::LegalHoldBlocksUpgrade,
+        );
+
+        // Validate new_wasm_hash is not all-zeros (issue #248)
+        let hash_bytes = new_wasm_hash.as_ref();
+        let is_all_zeros = hash_bytes.iter().all(|&byte| byte == 0);
+        ensure(
+            &env,
+            !is_all_zeros,
+            EscrowError::InvalidWasmHash,
+        );
 
         // Emit event before the deployer call so the event is recorded even if
         // the deployer call somehow reverts (defensive ordering)
@@ -8744,6 +8797,13 @@ impl StarfundEscrow {
             &env,
             escrow.admin != new_admin,
             EscrowError::NewAdminSameAsCurrent,
+        );
+
+        // Prevent proposing the contract address itself as admin (issue #251)
+        ensure(
+            &env,
+            new_admin.clone() != Address::from_contract_id(&env),
+            EscrowError::ProposedAdminIsContractAddress,
         );
 
         let previous_pending: Option<Address> =
