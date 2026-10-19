@@ -411,17 +411,17 @@ Floor rounding means any sub-`10_000`-unit residue stays with the SME. With
 
 ## 21. Pro-Rata Aggregate Payout Bound
 
-**Invariant:** The sum of all `compute_investor_payout` values must not exceed the settlement
-pool.
+**Invariant:** The sum of all `compute_investor_payout` values equals the settlement pool,
+rounded down once across all investor entitlements.
 
 ```
 settle_pool = total_principal + floor(total_principal × yield_bps / 10_000)
-Σ payout_i ≤ settle_pool
-residue = settle_pool - Σ payout_i ≥ 0
+Σ payout_i = settle_pool
 ```
 
-For uniform yield, `0 ≤ residue < n_investors` (each floor division drops at most 1 unit).
-The residue is swept by `sweep_terminal_dust` after all investors have claimed.
+For uniform yield, the aggregate remainder is distributed by largest remainder; ties use
+`InvestorIndex` funding order. For tiered yield, `get_settlement_pool()` returns the corresponding
+tier-weighted liability and `settle()` checks that amount.
 
 **Where enforced:**
 - `compute_investor_payout` uses `checked_mul` / `checked_div` with

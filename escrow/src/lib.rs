@@ -7472,19 +7472,9 @@ impl StarfundEscrow {
             );
         }
 
-        // Compute settle_pool using the same arithmetic as compute_investor_payout.
-        // coupon = funded_amount ├ù yield_bps / 10_000  (floor)
-        // settle_pool = funded_amount + coupon
-        let coupon = escrow
-            .funded_amount
-            .checked_mul(escrow.yield_bps as i128)
-            .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow))
-            .checked_div(10_000)
-            .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow));
-
-        let settle_pool = escrow
-            .funded_amount
-            .checked_add(coupon)
+        let settle_pool = Self::get_settlement_pool(env.clone());
+        let coupon = settle_pool
+            .checked_sub(escrow.funded_amount)
             .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow));
 
         let token_addr: Address = Self::funding_token_or_fail(&env);
@@ -8017,41 +8007,31 @@ impl StarfundEscrow {
     /// of the math specified in `docs/escrow-pro-rata.md`. Off-chain tooling should call this
     /// view rather than re-implementing the formula to guarantee identical rounding.
     ///
-    /// # Formula (floor / truncating integer division)
+    /// # Formula and rounding allocation
     ///
     /// ```text
     /// coupon       = total_principal × effective_yield_bps / 10_000  (floor)
     /// settle_pool  = total_principal + coupon
-    /// gross_payout = contribution × settle_pool / total_principal     (floor)
+    /// numerator_i  = contribution_i × settle_pool_i
+    /// base_i       = numerator_i / total_principal                    (floor)
+    /// remainder_i  = numerator_i % total_principal
     /// ```
     ///
-    /// # Rounding residue
-    ///
-    /// Both divisions use **truncating (floor) integer arithmetic**, which means each
-    /// investor's payout is rounded down to the nearest base unit. Across all investors
-    /// this produces a cumulative rounding residue:
-    ///
-    /// ```text
-    /// residue = settle_pool − Σ gross_payout_i  (≥ 0)
-    /// ```
-    ///
-    /// The residue is bounded by the number of unique investors (at most one base unit
-    /// lost per investor per division step) and is never negative. It accumulates in the
-    /// contract balance after all investors have claimed and is swept by
-    /// [`StarfundEscrow::sweep_terminal_dust`] once the escrow reaches a terminal state.
-    /// Off-chain tooling must account for this residue when reconciling the settlement
-    /// pool against the sum of individual payouts.
+    /// The `floor(sum(remainder_i) / total_principal)` largest remainders receive one
+    /// additional base unit. Equal remainders are resolved by [`DataKey::InvestorIndex`]
+    /// funding order, so the aggregate liability is rounded down once rather than losing
+    /// up to one stroop per investor.
     ///
     /// # Returns
     ///
     /// - `0` when [`DataKey::FundingCloseSnapshot`] does not exist (escrow not yet funded).
     /// - `0` when `investor` has no contribution (`DataKey::InvestorContribution` absent or zero).
-    /// - Computed floor payout otherwise.
+    /// - Computed payout, including any largest-remainder allocation, otherwise.
     ///
     /// # Invariant
     ///
-    /// The sum of `compute_investor_payout` over all investors is ≤ `total_principal + coupon`;
-    /// any rounding residual is swept by [`StarfundEscrow::sweep_terminal_dust`].
+    /// The sum of `compute_investor_payout` over all investors equals the aggregate rational
+    /// liability rounded down once.
     ///
     /// # Overflow safety
     ///
@@ -8062,6 +8042,40 @@ impl StarfundEscrow {
     /// # Authorization
     ///
     /// None — pure read; no auth required.
+    fn investor_payout_floor_and_remainder(
+        env: &Env,
+        investor: Address,
+        total_principal: i128,
+        base_yield_bps: i64,
+    ) -> (i128, i128) {
+        let contribution = Self::get_persistent_investor_contribution(env, investor.clone());
+        if contribution <= 0 {
+            return (0, 0);
+        }
+
+        let effective_yield_bps =
+            Self::get_persistent_investor_effective_yield(env, investor).unwrap_or(base_yield_bps);
+        let coupon = total_principal
+            .checked_mul(effective_yield_bps as i128)
+            .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow))
+            .checked_div(10_000)
+            .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow));
+        let investor_pool = total_principal
+            .checked_add(coupon)
+            .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow));
+        let numerator = contribution
+            .checked_mul(investor_pool)
+            .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow));
+        (
+            numerator
+                .checked_div(total_principal)
+                .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow)),
+            numerator
+                .checked_rem(total_principal)
+                .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow)),
+        )
+    }
+
     pub fn compute_investor_payout(env: Env, investor: Address) -> i128 {
         // Contribution fetch: returns 0 for non-participants without panicking.
         let contribution: i128 = Self::get_persistent_investor_contribution(&env, investor.clone());
@@ -8084,35 +8098,56 @@ impl StarfundEscrow {
         }
 
         // Resolve effective yield: investor-specific tier (set at first deposit) or escrow base.
-        // env.clone(): env is used again after this call for InvestorEffectiveYield read.
         let escrow = Self::get_escrow(env.clone());
-        let effective_yield_bps: i64 =
-            Self::get_persistent_investor_effective_yield(&env, investor.clone())
-                .unwrap_or(escrow.yield_bps);
+        let (base_payout, investor_remainder) = Self::investor_payout_floor_and_remainder(
+            &env,
+            investor.clone(),
+            total_principal,
+            escrow.yield_bps,
+        );
+        let index: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&keys::investor_index())
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut investor_index = None;
+        for i in 0..index.len() {
+            if index.get(i).unwrap() == investor {
+                investor_index = Some(i);
+                break;
+            }
+        }
+        let Some(investor_index) = investor_index else {
+            return base_payout;
+        };
 
-        // coupon = total_principal × effective_yield_bps / 10_000  (truncating floor division)
-        // Rounding: the remainder (total_principal × effective_yield_bps % 10_000) is silently
-        // discarded here. This is intentional — the residue accumulates in the contract balance
-        // and is swept by sweep_terminal_dust after all investors claim.
-        let coupon = total_principal
-            .checked_mul(effective_yield_bps as i128)
-            .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow))
-            .checked_div(10_000)
-            .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow));
+        let mut remainder_sum = 0i128;
+        let mut remainder_rank = 0u32;
+        for i in 0..index.len() {
+            let indexed_investor = index.get(i).unwrap();
+            let (_, remainder) = Self::investor_payout_floor_and_remainder(
+                &env,
+                indexed_investor,
+                total_principal,
+                escrow.yield_bps,
+            );
+            remainder_sum = remainder_sum
+                .checked_add(remainder)
+                .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow));
+            if remainder > investor_remainder
+                || (remainder == investor_remainder && i < investor_index)
+            {
+                remainder_rank = remainder_rank.saturating_add(1);
+            }
+        }
 
-        let settle_pool = total_principal
-            .checked_add(coupon)
-            .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow));
-
-        // gross_payout = contribution × settle_pool / total_principal  (truncating floor division)
-        // Rounding: each investor's payout is rounded down by at most 1 base unit. The cumulative
-        // residue across all investors (≥ 0) is bounded by the investor count and is swept by
-        // sweep_terminal_dust. See "# Rounding residue" in the function-level doc comment.
-        contribution
-            .checked_mul(settle_pool)
-            .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow))
-            .checked_div(total_principal)
-            .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow))
+        if (remainder_rank as i128) < remainder_sum / total_principal {
+            base_payout
+                .checked_add(1)
+                .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow))
+        } else {
+            base_payout
+        }
     }
 
     /// Authoritative on-chain aggregate view of the total settlement pool owed by the SME.
@@ -8124,36 +8159,31 @@ impl StarfundEscrow {
     /// is the exact amount the SME must repay for the contract to remain solvent through the
     /// last [`StarfundEscrow::claim_investor_payout`] call.
     ///
-    /// Solvency invariant (issue #94):
+    /// Solvency invariant:
     ///
     /// ```text
-    /// get_settlement_pool() = Σ_i floor(contribution_i × settle_pool_i / total_principal)
-    /// Σ_i claimable payout_i ≤ get_settlement_pool()
+    /// get_settlement_pool() = Σ_i base_payout_i + floor(Σ_i remainder_i / total_principal)
+    /// Σ_i compute_investor_payout(i) = get_settlement_pool()
     /// ```
     ///
-    /// The sum is exact (each term is the very same floored integer
-    /// [`StarfundEscrow::compute_investor_payout`] returns), so the pool can never be
-    /// under-funded for tiered escrows.
+    /// The sum is the total rational liability rounded down once, with aggregate remainder units
+    /// assigned by descending remainder and funding order as the tie-break.
     ///
     /// # Rounding
     ///
-    /// Every term uses truncating (floor) integer division, identical to the per-investor
-    /// formula:
+    /// Each investor starts with a truncating floor payout; the aggregate remainder is then
+    /// assigned to the largest fractional remainders:
     ///
     /// ```text
     /// settle_pool_i = total_principal + floor(total_principal × effective_yield_bps_i / 10_000)
-    /// payout_i      = contribution_i × settle_pool_i / total_principal   (floor)
+    /// base_i        = floor(contribution_i × settle_pool_i / total_principal)
+    /// payout_i      = base_i + largest_remainder_adjustment_i
     /// ```
     ///
     /// # Base-yield pool vs. tier-weighted pool
     ///
-    /// [`StarfundEscrow::settle`] still reports a **base-yield** `settle_pool` in its
-    /// [`SettlementResult`] / [`EscrowSettled`] payload
-    /// (`funded_amount + floor(funded_amount × yield_bps / 10_000)`), computed without
-    /// enumerating investors. That figure is informational only; for an escrow whose investors
-    /// sit at mixed yield tiers it is a **lower bound** on the real liability. Off-chain
-    /// repayment tooling must use this view, not the `settle` return value, to determine how
-    /// much the SME owes.
+    /// [`StarfundEscrow::settle`] reports and checks this exact tier-weighted liability in its
+    /// [`SettlementResult`] / [`EscrowSettled`] payload.
     ///
     /// # Returns
     ///
@@ -8161,13 +8191,13 @@ impl StarfundEscrow {
     /// - `0` when `total_principal <= 0` (degenerate snapshot).
     /// - The base-yield pool when no investor is recorded in [`DataKey::InvestorIndex`]
     ///   (defensive fallback; a funded escrow always records at least one investor).
-    /// - The sum of all per-investor gross payouts otherwise.
+    /// - The aggregate liability rounded down once, otherwise.
     ///
     /// # Cost
     ///
     /// O(n) over [`DataKey::InvestorIndex`], which is hard-capped at
-    /// [`MAX_UNIQUE_INVESTORS`] by [`StarfundEscrow::fund_impl`]. This is a read-only view and
-    /// is not on the release path measured by `release_budget_tests`.
+    /// [`MAX_UNIQUE_INVESTORS`] by [`StarfundEscrow::fund_impl`]. Both settlement and individual
+    /// payout reads use this O(n) bounded calculation.
     ///
     /// # Overflow safety
     ///
@@ -8223,48 +8253,27 @@ impl StarfundEscrow {
                 .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow));
         }
 
-        // Σ payout_i, term-by-term identical to compute_investor_payout so the aggregate
-        // can never under-fund the last claimant.
-        let mut total_liability: i128 = 0;
+        let mut total_base_payouts: i128 = 0;
+        let mut total_remainders: i128 = 0;
         for i in 0..index.len() {
             let investor = index.get(i).unwrap();
-
-            // Zero-contribution investors hold no claim; compute_investor_payout returns 0.
-            let contribution: i128 =
-                Self::get_persistent_investor_contribution(&env, investor.clone());
-            if contribution <= 0 {
-                continue;
-            }
-
-            // Per-investor tiered yield, else the escrow base yield.
-            let effective_yield_bps: i64 =
-                Self::get_persistent_investor_effective_yield(&env, investor.clone())
-                    .unwrap_or(escrow.yield_bps);
-
-            // settle_pool_i = total_principal + floor(total_principal × yield_i / 10_000)
-            let coupon = total_principal
-                .checked_mul(effective_yield_bps as i128)
-                .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow))
-                .checked_div(10_000)
+            let (base_payout, remainder) = Self::investor_payout_floor_and_remainder(
+                &env,
+                investor,
+                total_principal,
+                escrow.yield_bps,
+            );
+            total_base_payouts = total_base_payouts
+                .checked_add(base_payout)
                 .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow));
-
-            let settle_pool_i = total_principal
-                .checked_add(coupon)
-                .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow));
-
-            // payout_i = floor(contribution_i × settle_pool_i / total_principal)
-            let payout = contribution
-                .checked_mul(settle_pool_i)
-                .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow))
-                .checked_div(total_principal)
-                .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow));
-
-            total_liability = total_liability
-                .checked_add(payout)
+            total_remainders = total_remainders
+                .checked_add(remainder)
                 .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow));
         }
 
-        total_liability
+        total_base_payouts
+            .checked_add(total_remainders / total_principal)
+            .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow))
     }
 
     /// Admin-only setter for the invoice maturity timestamp.

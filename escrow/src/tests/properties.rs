@@ -1190,14 +1190,13 @@ fn fuzz_multi_investor_fund_ordering_snapshot_once_only() {
 //
 // Reference: docs/escrow-pro-rata.md
 //
-// Formula (floor / truncating integer division):
+// Formula (floor plus aggregate largest-remainder allocation):
 //   coupon      = total_principal × yield_bps / 10_000   (floor)
 //   settle_pool = total_principal + coupon
-//   payout_i    = contribution_i  × settle_pool / total_principal (floor)
+//   payout_i    = floor(contribution_i × settle_pool / total_principal) + remainder award
 //
 // Invariants tested:
-//   1. Σ payout_i ≤ settle_pool  (conservation — no over-distribution)
-//   2. settle_pool - Σ payout_i ≥ 0  (non-negative residue swept as dust)
+//   1. Σ payout_i == floor(Σ exact investor entitlements) (exact aggregate conservation)
 //   3. Non-participant returns 0
 //   4. ComputePayoutArithmeticOverflow on overflow inputs
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1251,7 +1250,7 @@ fn funded_and_settled_escrow<'a>(
     client
 }
 
-/// Property: sum of all computed payouts never exceeds settle_pool.
+/// Property: sum of computed payouts exactly matches the aggregate settle_pool.
 /// Covers single investor, equal splits, and prime-denominator splits.
 proptest! {
     #[test]
@@ -1297,14 +1296,10 @@ proptest! {
             .map(|inv| client.compute_investor_payout(inv))
             .sum();
 
-        prop_assert!(
-            payout_sum <= expected_pool,
-            "sum of payouts ({payout_sum}) exceeded settle_pool ({expected_pool})"
-        );
-        let residue = expected_pool - payout_sum;
-        prop_assert!(
-            residue >= 0,
-            "residue must be non-negative, got {residue}"
+        prop_assert_eq!(
+            payout_sum,
+            expected_pool,
+            "sum of payouts must equal settle_pool after remainder allocation"
         );
     }
 }
@@ -1339,7 +1334,7 @@ fn payout_single_investor_equals_settle_pool() {
 }
 
 /// Equal split: two investors each with the same contribution → payouts are equal
-/// and their sum ≤ settle_pool.
+/// and their sum equals settle_pool.
 #[test]
 fn payout_equal_split_conservation() {
     let env = Env::default();
@@ -1364,9 +1359,57 @@ fn payout_equal_split_conservation() {
     let pb = client.compute_investor_payout(&inv_b);
 
     assert_eq!(pa, pb, "equal contributions must yield equal payouts");
-    assert!(pa + pb <= settle_pool, "sum must not exceed settle_pool");
-    let residue = settle_pool - pa - pb;
-    assert!(residue >= 0, "residue must be non-negative");
+    assert_eq!(pa + pb, settle_pool, "sum must equal settle_pool");
+}
+
+/// Largest remainders receive the aggregate fractional stroop without exceeding the pool.
+#[test]
+fn payout_largest_remainder_allocates_residue() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let investors: Vec<Address> = (0..3).map(|_| Address::generate(&env)).collect();
+    let client = funded_and_settled_escrow(
+        &env,
+        "REMAINDER",
+        3_333i64,
+        &[
+            (investors[0].clone(), 1),
+            (investors[1].clone(), 1),
+            (investors[2].clone(), 2),
+        ],
+    );
+
+    let payouts: Vec<i128> = investors
+        .iter()
+        .map(|investor| client.compute_investor_payout(investor))
+        .collect();
+    let pool = client.get_settlement_pool();
+
+    assert_eq!(payouts.iter().sum::<i128>(), pool);
+    assert_eq!(pool, 5);
+    assert_eq!(payouts[0], 1);
+    assert_eq!(payouts[1], 1);
+    assert_eq!(payouts[2], 3);
+}
+
+#[test]
+fn payout_largest_remainder_ties_follow_funding_order() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let first = Address::generate(&env);
+    let second = Address::generate(&env);
+    let client = funded_and_settled_escrow(
+        &env,
+        "REMTIE01",
+        5_000i64,
+        &[(first.clone(), 1), (second.clone(), 1)],
+    );
+
+    assert_eq!(client.compute_investor_payout(&first), 2);
+    assert_eq!(client.compute_investor_payout(&second), 1);
+    assert_eq!(client.get_settlement_pool(), 3);
 }
 
 /// Zero yield: payout == contribution for every investor, sum == total_principal.
@@ -1425,11 +1468,7 @@ fn payout_max_yield_conservation() {
     let pa = client.compute_investor_payout(&inv_a);
     let pb = client.compute_investor_payout(&inv_b);
 
-    assert!(
-        pa + pb <= settle_pool,
-        "sum must not exceed settle_pool at max yield"
-    );
-    assert!(settle_pool - pa - pb >= 0, "residue non-negative");
+    assert_eq!(pa + pb, settle_pool, "sum must equal settle_pool");
 }
 
 /// Prime denominator: total_principal is a prime so most floor divisions produce a remainder.

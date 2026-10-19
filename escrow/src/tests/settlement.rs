@@ -3886,9 +3886,7 @@ fn setup_tiered_pool<'a>(
     (client, token, contract_id, treasury)
 }
 
-/// #94: with investors sitting at different yield tiers, the base-yield pool
-/// reported by `settle` under-states the real liability, while
-/// `get_settlement_pool()` must cover the sum of every tiered claim.
+/// Tier-weighted pool and per-investor claims use the same largest-remainder total.
 #[test]
 fn tiered_settlement_pool_covers_sum_of_investor_payouts() {
     let env = Env::default();
@@ -3915,27 +3913,27 @@ fn tiered_settlement_pool_covers_sum_of_investor_payouts() {
     // Funded: the close snapshot is taken here.
     assert_eq!(client.get_escrow().status, 1u32);
 
+    let pool = client.get_settlement_pool();
+    token.stellar.mint(&contract_id, &(pool - target));
     let result = client.settle();
     assert_eq!(result.escrow.status, 2u32);
 
-    let pool = client.get_settlement_pool();
     let payout_tier = client.compute_investor_payout(&inv_tier);
     let payout_base = client.compute_investor_payout(&inv_base);
+    let base_yield_pool = target + target * 800 / 10_000;
 
     assert!(
-        pool > result.settle_pool,
-        "tier-weighted pool ({pool}) must exceed the base-yield pool ({}) for a mixed-tier escrow",
-        result.settle_pool,
+        pool > base_yield_pool,
+        "tier-weighted pool ({pool}) must exceed base-yield pool ({base_yield_pool})",
     );
+    assert_eq!(result.settle_pool, pool);
     assert_eq!(
         pool,
         payout_tier + payout_base,
-        "get_settlement_pool must equal the exact sum of per-investor payouts",
+        "get_settlement_pool must equal the sum of per-investor payouts",
     );
 
     // Solvency: the SME repays exactly `pool`; both claims must be payable.
-    let extra = pool - target;
-    token.stellar.mint(&contract_id, &extra);
     assert_eq!(token.stellar.balance(&contract_id), pool);
 
     env.ledger().set_timestamp(200);

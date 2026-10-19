@@ -130,7 +130,7 @@ Emitted when the SME finalizes the escrow after maturity.
 - `yield_bps` (i64)
 - `maturity` (u64)
 - `settled_at_ledger_timestamp` (u64) — the ledger timestamp when `settle` was called
-- `settle_pool` (i128) — realized settlement pool: `total_principal + floor(total_principal × yield_bps / 10_000)`. Computed from `FundingCloseSnapshot.total_principal` using the same checked arithmetic as `compute_investor_payout`. Zero on legacy escrows that pre-date the snapshot key.
+- `settle_pool` (i128) — total investor liability rounded down once across all investor entitlements. For uniform yield this is `total_principal + floor(total_principal × yield_bps / 10_000)`; mixed tiers use their effective yields. Fractional base units are assigned by largest remainder, with funding order breaking ties.
 
 **Example (JSON Decoded):**
 ```json

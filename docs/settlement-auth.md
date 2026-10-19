@@ -68,7 +68,7 @@ Finalizes the escrow after maturity (when configured), transitioning to `status 
 | **Status precondition** | `status != 2` → `EscrowAlreadySettled (236)` (once-only guard); then `status == 1` (Funded) → `SettlementNotFunded (121)` if not |
 | **Maturity gate** | If `maturity > 0`, requires `ledger.timestamp() >= maturity` → `MaturityNotReached (122)` |
 | **State transition** | `1 → 2` (writes `SettledAt` ledger timestamp, emits `EscrowSettled` event) |
-| **Settle pool computation** | `settle_pool = funded_amount + (funded_amount * yield_bps / 10_000)` (floor) |
+| **Settle pool computation** | Exact investor liability from `get_settlement_pool()`, including largest-remainder allocation across tier-adjusted payouts |
 
 **Guard ordering:**
 1. `ensure(!paused_active, PausedBlocksSettlement)`
