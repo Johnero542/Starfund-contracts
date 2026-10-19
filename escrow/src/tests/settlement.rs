@@ -23,7 +23,7 @@ use super::{
 };
 use crate::{
     EscrowError, EscrowSettled, InvoiceEscrow, StarfundEscrow, SettlementConfig,
-    SettlementReadiness, SettlementResult, SmeWithdrew, YieldTier,
+    SettlementBatchStatus, SettlementReadiness, SettlementResult, SmeWithdrew, YieldTier,
 };
 use soroban_sdk::{
     symbol_short,
@@ -3161,6 +3161,41 @@ fn settlement_result_pool_matches_get_settlement_pool() {
         result.settle_pool, pool_view,
         "SettlementResult.settle_pool must match get_settlement_pool()"
     );
+}
+
+#[test]
+fn settle_batch_reports_failures_and_continues_settling() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (first, first_token, first_id, _) = setup_claim_env(&env, "BATCHFIRST", TARGET, 0);
+    let (last, last_token, last_id, _) = setup_claim_env(&env, "BATCHLAST", TARGET, 0);
+    for (client, token) in [(&first, &first_token), (&last, &last_token)] {
+        let investor = Address::generate(&env);
+        token.stellar.mint(&investor, &TARGET);
+        client.fund(&investor, &TARGET);
+    }
+    let executor = deploy(&env);
+    let uninitialized_id = super::deploy_id(&env);
+    let escrows = soroban_sdk::vec![&env, first_id, uninitialized_id, last_id];
+
+    let outcomes = executor.settle_batch(&escrows);
+
+    assert_eq!(outcomes.len(), 3);
+    assert_eq!(
+        outcomes.get(0).unwrap().status,
+        SettlementBatchStatus::Settled
+    );
+    assert_eq!(
+        outcomes.get(1).unwrap().status,
+        SettlementBatchStatus::FailedContract(EscrowError::EscrowNotInitialized as u32)
+    );
+    assert_eq!(
+        outcomes.get(2).unwrap().status,
+        SettlementBatchStatus::Settled
+    );
+    assert_eq!(first.get_escrow().status, 2);
+    assert_eq!(last.get_escrow().status, 2);
 }
 
 /// `SettlementResult.escrow` snapshot must have status == 2 and correct maturity.

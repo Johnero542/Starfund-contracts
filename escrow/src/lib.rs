@@ -2019,6 +2019,28 @@ pub struct SettlementResult {
     pub settled_at: u64,
 }
 
+/// Per-escrow outcome returned by [`StarfundEscrow::settle_batch`].
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SettlementBatchStatus {
+    /// Settlement completed successfully.
+    Settled,
+    /// The escrow call failed with this contract error code.
+    FailedContract(u32),
+    /// The call failed for a non-contract reason, such as a missing contract or return decoding.
+    FailedInvocation,
+}
+
+/// Result for one address passed to [`StarfundEscrow::settle_batch`].
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SettlementBatchOutcome {
+    /// Escrow contract address that was attempted.
+    pub escrow: Address,
+    /// Whether settlement succeeded, or the reason it failed.
+    pub status: SettlementBatchStatus,
+}
+
 /// Read-only snapshot of all settlement-relevant configuration.
 ///
 /// Returned by [`StarfundEscrow::get_settlement_config`]. Every field is read from
@@ -7515,10 +7537,10 @@ impl StarfundEscrow {
 
     /// Batch settle entrypoint: settle multiple escrows in a single call.
     ///
-    /// Each address is processed sequentially. All existing [`StarfundEscrow::settle`]
-    /// invariants (pause gate, legal hold, funded status, maturity check, and the
-    /// once-only [`EscrowError::EscrowAlreadySettled`] guard) are enforced per entry. The
-    /// entire batch is atomic: if any escrow fails to settle, the entire call reverts.
+    /// Each address is processed sequentially and independently. All existing
+    /// [`StarfundEscrow::settle`] invariants (pause gate, legal hold, funded status, maturity
+    /// check, and the once-only [`EscrowError::EscrowAlreadySettled`] guard) are enforced per
+    /// entry. A failure does not revert successful settlements for other addresses.
     ///
     /// # Parameters
     /// - `escrows`: `Vec<Address>` of escrow contract addresses to settle.
@@ -7527,13 +7549,14 @@ impl StarfundEscrow {
     /// - [`EscrowError::SettlementBatchEmpty`] if `escrows` is empty
     /// - [`EscrowError::SettlementBatchTooLarge`] if `escrows.len() > [`MAX_SETTLE_BATCH`]
     ///
-    /// Per-entry errors (not funded, maturity not reached, legal hold, paused, auth failure)
-    /// terminate the entire batch atomically.
+    /// Per-entry failures are reported in the returned vector as
+    /// [`SettlementBatchStatus::FailedContract`] or
+    /// [`SettlementBatchStatus::FailedInvocation`]; they do not abort the batch.
     ///
     /// # Events
     /// One [`EscrowSettled`] per successfully settled escrow (emitted by each target escrow's
     /// [`StarfundEscrow::settle`] call).
-    pub fn settle_batch(env: Env, escrows: Vec<Address>) {
+    pub fn settle_batch(env: Env, escrows: Vec<Address>) -> Vec<SettlementBatchOutcome> {
         let n = escrows.len();
         ensure(&env, n > 0, EscrowError::SettlementBatchEmpty);
         ensure(
@@ -7542,11 +7565,26 @@ impl StarfundEscrow {
             EscrowError::SettlementBatchTooLarge,
         );
 
+        let mut outcomes = Vec::new(&env);
         for i in 0..n {
             let escrow_addr = escrows.get(i).unwrap();
-            let client = StarfundEscrowClient::new(&env, &escrow_addr);
-            client.settle();
+            let status = match env.try_invoke_contract::<SettlementResult>(
+                &escrow_addr,
+                &symbol_short!("settle"),
+                (),
+            ) {
+                Ok(Ok(_)) => SettlementBatchStatus::Settled,
+                Err(Err(soroban_sdk::InvokeError::Contract(code))) => {
+                    SettlementBatchStatus::FailedContract(code)
+                }
+                _ => SettlementBatchStatus::FailedInvocation,
+            };
+            outcomes.push_back(SettlementBatchOutcome {
+                escrow: escrow_addr,
+                status,
+            });
         }
+        outcomes
     }
 
     /// Admin releases funds to the SME up to the remaining obligation, net of the immutable protocol fee.

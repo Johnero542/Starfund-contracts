@@ -78,6 +78,14 @@ Finalizes the escrow after maturity (when configured), transitioning to `status 
 5. `ensure(status == 1, SettlementNotFunded)`
 6. `if maturity > 0 { ensure(now >= maturity, MaturityNotReached) }`
 
+### `settle_batch(env: Env, escrows: Vec<Address>)`
+
+Processes up to `MAX_SETTLE_BATCH` escrow addresses sequentially and returns one outcome per
+input address. Each target's normal settlement checks apply independently: successful entries
+remain settled when another entry fails. Outcomes are `Settled`, `FailedContract(code)` for a
+target contract error, or `FailedInvocation` for other invocation failures. Empty and oversized
+batches still fail the batch call with `SettlementBatchEmpty` and `SettlementBatchTooLarge`.
+
 ---
 
 ### 3. `withdraw(env: Env) -> InvoiceEscrow`
