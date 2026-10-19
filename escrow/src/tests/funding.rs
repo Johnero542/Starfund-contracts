@@ -7750,3 +7750,47 @@ fn test_unfund_event_emitted() {
 
     assert_eq!(*last, expected.to_xdr(&env, &contract_id));
 }
+
+#[test]
+fn test_unfund_batch_rejects_duplicate_investor_before_processing_entries() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let investor = Address::generate(&env);
+    let (token, treasury) = free_addresses(&env);
+    client.init(
+        &admin,
+        &String::from_str(&env, "UFB_DUP"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &0u64,
+        &token,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+    client.fund(&investor, &1_000i128);
+
+    let entries = SorobanVec::from_array(
+        &env,
+        [(investor.clone(), 1_000i128), (investor.clone(), 1i128)],
+    );
+    assert_contract_error(
+        client.try_unfund_batch(&entries),
+        EscrowError::UnfundBatchDuplicateInvestor,
+    );
+
+    assert_eq!(client.get_contribution(&investor), 1_000i128);
+    assert_eq!(client.get_escrow().funded_amount, 1_000i128);
+    assert_eq!(client.get_unique_funder_count(), 1);
+    assert_eq!(client.get_investors(&0, &10).len(), 1);
+}
