@@ -377,6 +377,7 @@ pub enum FeeScheduleError {
     InvalidActivationLedger = 2,
     PendingScheduleExists = 3,
     NotInitialized = 4,
+    EscrowNotOpen = 5,
 }
 
 // ---------------------------------------------------------------------------
@@ -944,6 +945,8 @@ pub enum EscrowError {
     WithdrawNetArithmeticUnderflow = 217,
     /// [`StarfundEscrow::init`] rejected a `funding_deadline` at or after maturity.
     FundingDeadlineAtOrAfterMaturity = 218,
+    /// [`StarfundEscrow::set_protocol_fee_bps`] called while escrow is not open.
+    ProtocolFeeUpdateNotOpen = 219,
 
     /// [`StarfundEscrow::settle_batch`] received an empty escrow addresses vector.
     SettlementBatchEmpty = 223,
@@ -3005,6 +3008,10 @@ impl StarfundEscrow {
             .unwrap_or_else(|| panic_with_error!(&env, FeeScheduleError::NotInitialized));
         escrow.admin.require_auth();
 
+        if escrow.status != 0 {
+            panic_with_error!(&env, FeeScheduleError::EscrowNotOpen);
+        }
+
         if schedule.min_fee_bps > schedule.fee_bps
             || schedule.fee_bps > schedule.max_fee_bps
             || schedule.max_fee_bps > 10_000
@@ -3052,9 +3059,15 @@ impl StarfundEscrow {
                 env.storage()
                     .instance()
                     .set(&FeeScheduleStorageKey::Active, &p);
-                env.storage()
-                    .instance()
-                    .set(&FeeScheduleStorageKey::Previous, &previous);
+                if let Some(prev_schedule) = previous {
+                    env.storage()
+                        .instance()
+                        .set(&FeeScheduleStorageKey::Previous, &prev_schedule);
+                } else {
+                    env.storage()
+                        .instance()
+                        .remove(&FeeScheduleStorageKey::Previous);
+                }
                 env.storage()
                     .instance()
                     .remove(&FeeScheduleStorageKey::Pending);
@@ -4313,8 +4326,16 @@ impl StarfundEscrow {
     /// Valid values are `0..=10_000`. Out-of-range values fail with
     /// [`EscrowError::ProtocolFeeBpsOutOfRange`]. The call requires the current escrow admin to
     /// authorize it and emits [`ProtocolFeeUpdated`] when the stored fee changes.
-    pub fn set_protocol_fee_bps(env: Env, new_fee_bps: i64) -> i64 {
+    pub fn set_protocol_fee_bps(env: Env, new_fee_bps: i64, expected_nonce: u32) -> i64 {
         let escrow = Self::load_escrow_require_admin(&env);
+
+        ensure(
+            &env,
+            escrow.status == 0,
+            EscrowError::ProtocolFeeUpdateNotOpen,
+        );
+
+        Self::consume_admin_nonce(&env, expected_nonce);
 
         ensure(
             &env,
