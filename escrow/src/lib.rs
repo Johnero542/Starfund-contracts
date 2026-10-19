@@ -421,9 +421,6 @@ pub const MAX_REFUND_BATCH: u32 = 50;
 /// Upper bound on [`StarfundEscrow::unfund_batch`] entries to keep storage/CPU bounded.
 pub const MAX_UNFUND_BATCH: u32 = 50;
 
-/// Upper bound on [`StarfundEscrow::set_investors_allowlisted`] batch size.
-pub const MAX_INVESTOR_ALLOWLIST_BATCH: u32 = 32;
-
 /// Upper bound on [`StarfundEscrow::get_contributions`] / investor read batch size.
 pub const MAX_INVESTOR_READ_BATCH: u32 = 50;
 
@@ -848,11 +845,11 @@ pub enum EscrowError {
     /// [`StarfundEscrow::refund_batch`] exceeded [`MAX_REFUND_BATCH`].
     RefundBatchTooLarge = 145,
     /// [`StarfundEscrow::unfund_batch`] received an empty entries vector.
-    UnfundBatchEmpty = 251,
+    UnfundBatchEmpty = 187,
     /// [`StarfundEscrow::unfund_batch`] exceeded [`MAX_UNFUND_BATCH`].
-    UnfundBatchTooLarge = 252,
+    UnfundBatchTooLarge = 188,
     /// [`StarfundEscrow::unfund_batch`] contained a duplicate investor address.
-    UnfundBatchDuplicateInvestor = 253,
+    UnfundBatchDuplicateInvestor = 189,
 
     /// `clear_legal_hold` was called without a prior `request_legal_hold_clear`.
     LegalHoldClearRequestMissing = 150,
@@ -877,9 +874,9 @@ pub enum EscrowError {
     LegalHoldBlocksPayerRotation = 163,
     /// Payer rotation was attempted while the escrow was not in a pre-settlement state
     /// (`status` must be 0 = open or 1 = funded).
-    PayerRotationNotOpen = 178,
+    PayerRotationNotOpen = 185,
     /// The proposed new payer address is identical to the current payer.
-    NewPayerSameAsCurrent = 179,
+    NewPayerSameAsCurrent = 186,
     /// [`StarfundEscrow::rotate_payer`] blocked while operational pause is active.
     PausedBlocksPayerRotation = 180,
     /// [`StarfundEscrow::rotate_payer`] blocked while a dispute is active.
@@ -909,7 +906,7 @@ pub enum EscrowError {
     /// [`validate_maturity_bounds`] rejected a maturity timestamp beyond the configured horizon.
     MaturityExceedsMaxHorizon = 167,
     /// [`StarfundEscrow::revoke_attestation_digest`] called on a non-revoked index.
-    AttestationDigestNotRevoked = 252,
+    AttestationDigestNotRevoked = 265,
     /// [`StarfundEscrow::update_funding_deadline`] called while escrow is not open.
     FundingDeadlineUpdateNotOpen = 169,
     /// [`StarfundEscrow::claim_investor_payout`] computed a zero payout.
@@ -926,7 +923,7 @@ pub enum EscrowError {
     /// Inbound token transfer detected recipient balance delta underflow.
     InboundRecipientBalanceUnderflow = 175,
     /// Inbound token transfer detected recipient received amount differs from requested transfer.
-    InboundRecipientBalanceDeltaMismatch = 258,
+    InboundRecipientBalanceDeltaMismatch = 272,
 
     /// [`StarfundEscrow::fund`] blocked while operational pause is active.
     PausedBlocksFunding = 210,
@@ -948,7 +945,7 @@ pub enum EscrowError {
     /// [`StarfundEscrow::init`] rejected a `funding_deadline` at or after maturity.
     FundingDeadlineAtOrAfterMaturity = 218,
     /// [`StarfundEscrow::update_maturity`] set maturity less than 30 days after the funding deadline.
-    MaturityTooCloseToFundingDeadline = 261,
+    MaturityTooCloseToFundingDeadline = 273,
 
     /// [`StarfundEscrow::settle_batch`] received an empty escrow addresses vector.
     SettlementBatchEmpty = 223,
@@ -989,8 +986,6 @@ pub enum EscrowError {
     /// [`StarfundEscrow::update_yield_bps`] received a `new_yield_bps` equal to the current value.
     /// No-op updates are rejected to prevent spurious events and unnecessary storage writes.
     YieldBpsUnchanged = 229,
-    /// [`StarfundEscrow::set_paused`] received a scope that does not match the active pause.
-    PauseScopeMismatch = 248,
     /// [`StarfundEscrow::set_storage_limit`] received a non-positive limit.
     StorageLimitNotPositive = 232,
     /// [`StarfundEscrow::set_storage_limit`] received a limit outside allowed range.
@@ -1031,20 +1026,20 @@ pub enum EscrowError {
     /// A dispute has already been opened and is still active.
     DisputeAlreadyOpen = 250,
     /// No dispute is active for this escrow.
-    DisputeNotOpen = 251,
+    DisputeNotOpen = 285,
 
     /// [`StarfundEscrow::execute_callback`] called from an origin address different from the registered origin context.
-    CallbackWrongOrigin = 252,
+    CallbackWrongOrigin = 286,
     /// [`StarfundEscrow::execute_callback`] called with an invocation nonce that does not match the stored context.
-    CallbackWrongNonce = 253,
+    CallbackWrongNonce = 287,
     /// [`StarfundEscrow::execute_callback`] called with a lifecycle phase different from the expected phase.
-    CallbackWrongPhase = 254,
+    CallbackWrongPhase = 288,
     /// [`StarfundEscrow::execute_callback`] called with a callback context that has already been consumed (replay attempt).
-    CallbackReplayed = 255,
+    CallbackReplayed = 289,
     /// [`StarfundEscrow::execute_callback`] or [`StarfundEscrow::register_callback`] called after the escrow has been cancelled.
-    CallbackAfterCancellation = 256,
+    CallbackAfterCancellation = 290,
     /// [`StarfundEscrow::execute_callback`] called with a nonce that has no registered callback context.
-    CallbackNotFound = 257,
+    CallbackNotFound = 291,
     /// [`StarfundEscrow::rebind_registry`] called when escrow status is no longer open
     /// (status != 0). The registry hint becomes immutable once funding/settlement begins.
     RegistryImmutableAfterFunding = 258,
@@ -1069,8 +1064,6 @@ pub enum EscrowError {
     NoPendingPayer = 263,
     /// [`StarfundEscrow::propose_payer_recovery`] called while escrow is not in open or funded status.
     PayerRecoveryNotOpen = 264,
-    /// [`StarfundEscrow::propose_payer_recovery`] nominated the current payer address.
-    NewPayerSameAsCurrent = 265,
     /// [`StarfundEscrow::withdraw`] called when remaining funded amount is zero.
     NothingToWithdraw = 266,
     /// [`StarfundEscrow::cancel_funding`] called while a dispute remains active.
@@ -1527,9 +1520,6 @@ pub enum DataKey {
     /// Number of [`StarfundEscrow::set_paused`] calls recorded within the current rate-limit
     /// window. Absent ⇒ `0`.
     PauseToggleCountInWindow,
-    /// Typed scope and reason for the active operational pause.
-    /// **Additive key (ADR-007):** absent on legacy instances and interpreted as a global pause.
-    PauseState,
     /// Admin-configured ceiling on storage entries processed per batch operation.
     /// **Additive key (ADR-007):** absent ⇒ [`DEFAULT_SETTLEMENT_LIMIT`]. Updatable via
     /// [`StarfundEscrow::set_storage_limit`].
@@ -1548,10 +1538,6 @@ pub enum DataKey {
     /// reads as `false`. Written by the dispute lifecycle (admin/off-chain) and checked by
     /// [`StarfundEscrow::close_escrow`].
     Dispute,
-    /// Running total of principal released to the SME; absent ⇒ `0` for legacy instances.
-    ReleasedAmount,
-    /// Expected nonce for admin replay protection; absent ⇒ `0`.
-    AdminNonce,
     /// Funding-token decimal scale used to validate token amounts; absent until initialization.
     FundingTokenScale,
     /// Persistent, fixed-size page of the allowlist index; `AllowlistPage(page)`
@@ -2177,16 +2163,6 @@ pub struct MinContributionFloorLowered {
 }
 
 #[contractevent]
-pub struct MinContributionFloorRaised {
-    #[topic]
-    pub name: Symbol,
-    #[topic]
-    pub invoice_id: Symbol,
-    pub old_floor: i128,
-    pub new_floor: i128,
-}
-
-#[contractevent]
 pub struct MaxPerInvestorCapRaised {
     #[topic]
     pub name: Symbol,
@@ -2579,30 +2555,6 @@ pub struct FundingDeadlineExtended {
 }
 
 #[contractevent]
-pub struct CallbackRegisteredEvent {
-    #[topic]
-    pub name: Symbol,
-    #[topic]
-    pub invoice_id: Symbol,
-    #[topic]
-    pub origin: Address,
-    pub nonce: u64,
-    pub phase: u32,
-}
-
-#[contractevent]
-pub struct CallbackExecutedEvent {
-    #[topic]
-    pub name: Symbol,
-    #[topic]
-    pub invoice_id: Symbol,
-    #[topic]
-    pub origin: Address,
-    pub nonce: u64,
-    pub phase: u32,
-}
-
-#[contractevent]
 pub struct LegalHoldChanged {
     #[topic]
     pub name: Symbol,
@@ -2733,30 +2685,6 @@ pub struct CollateralClearedEvt {
     pub amount: i128,
     /// Ledger timestamp from the original recorded commitment.
     pub recorded_at: u64,
-}
-
-#[contractevent]
-pub struct CallbackRegisteredEvent {
-    #[topic]
-    pub name: Symbol,
-    #[topic]
-    pub invoice_id: Symbol,
-    #[topic]
-    pub origin: Address,
-    pub nonce: u64,
-    pub phase: u32,
-}
-
-#[contractevent]
-pub struct CallbackExecutedEvent {
-    #[topic]
-    pub name: Symbol,
-    #[topic]
-    pub invoice_id: Symbol,
-    #[topic]
-    pub origin: Address,
-    pub nonce: u64,
-    pub phase: u32,
 }
 
 #[contractevent]
@@ -6759,38 +6687,6 @@ impl StarfundEscrow {
         new_cap
     }
 
-    /// Raises the minimum contribution floor while the escrow is still open.
-    ///
-    /// The floor applies to each subsequent contribution. This is admin-only and requires
-    /// `new_floor` to be positive and strictly greater than the configured floor.
-    pub fn raise_min_contribution_floor(env: Env, new_floor: i128) -> i128 {
-        let escrow = Self::load_escrow_require_admin(&env);
-
-        guard_status_eq(&env, escrow.status, 0, EscrowError::FloorRaiseNotOpen);
-        ensure(&env, new_floor > 0, EscrowError::NewFloorNotPositive);
-
-        let old_floor: i128 = env
-            .storage()
-            .instance()
-            .get(&keys::min_contribution_floor())
-            .unwrap_or(0);
-        ensure(&env, new_floor > old_floor, EscrowError::NewFloorNotHigher);
-
-        env.storage()
-            .instance()
-            .set(&keys::min_contribution_floor(), &new_floor);
-
-        MinContributionFloorRaised {
-            name: symbol_short!("floor_hi"),
-            invoice_id: escrow.invoice_id,
-            old_floor,
-            new_floor,
-        }
-        .publish(&env);
-
-        new_floor
-    }
-
     /// Lowers the configured per-investor contribution cap while the escrow is open.
     ///
     /// Admin-only. A cap must already be configured, and `new_cap` must be positive and
@@ -9098,7 +8994,7 @@ impl StarfundEscrow {
             .set(&DataKey::PendingPayerExpiry, &expiry);
 
         PayerRecoveryProposed {
-            name: symbol_short!("payer_prop"),
+            name: symbol_short!("payer_p"),
             invoice_id: escrow.invoice_id.clone(),
             current_payer: escrow.payer.clone(),
             pending_payer: new_payer.clone(),
