@@ -3392,6 +3392,30 @@ impl StarfundEscrow {
         }
     }
 
+    fn commitment_claim_not_before(
+        env: &Env,
+        escrow: &InvoiceEscrow,
+        committed_lock_secs: u64,
+    ) -> u64 {
+        if committed_lock_secs == 0 {
+            return 0;
+        }
+
+        let claim_not_before = env
+            .ledger()
+            .timestamp()
+            .checked_add(committed_lock_secs)
+            .unwrap_or_else(|| fail(env, EscrowError::InvestorClaimTimeOverflow));
+        if escrow.maturity > 0 {
+            ensure(
+                env,
+                claim_not_before <= escrow.maturity,
+                EscrowError::CommitmentLockExceedsMaturity,
+            );
+        }
+        claim_not_before
+    }
+
     /// Initialize escrow. `funding_target` defaults to `amount`.
     ///
     /// Binds **`funding_token`**, **`treasury`**, and optional **`registry`** for this instance only.
@@ -4850,6 +4874,7 @@ impl StarfundEscrow {
     pub fn preview_yield_tier(env: Env, amount: i128, lock: u64) -> YieldResolution {
         let _ = amount; // accepted for signature parity with fund_with_commitment; unused in lock-only selection
         let escrow = Self::get_escrow(env.clone());
+        Self::commitment_claim_not_before(&env, &escrow, lock);
         Self::effective_yield_for_commitment(&env, escrow.yield_bps, lock)
     }
 
@@ -7178,20 +7203,7 @@ impl StarfundEscrow {
                 escrow.yield_bps,
                 committed_lock_secs,
             );
-            let now = env.ledger().timestamp();
-            claim_nb = if committed_lock_secs == 0 {
-                0u64
-            } else {
-                now.checked_add(committed_lock_secs)
-                    .unwrap_or_else(|| fail(&env, EscrowError::InvestorClaimTimeOverflow))
-            };
-            if claim_nb > 0 && escrow.maturity > 0 {
-                ensure(
-                    &env,
-                    claim_nb <= escrow.maturity,
-                    EscrowError::CommitmentLockExceedsMaturity,
-                );
-            }
+            claim_nb = Self::commitment_claim_not_before(&env, &escrow, committed_lock_secs);
         }
 
         let investor_effective_yield_bps = resolution.effective_yield_bps;

@@ -3942,6 +3942,28 @@ fn init_with_maturity(
 }
 
 #[test]
+fn preview_commitment_lock_must_not_extend_past_maturity() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let mut ledger = env.ledger().get();
+    ledger.timestamp = 1_000;
+    env.ledger().set(ledger);
+    init_with_maturity(&env, &client, &admin, &sme, 2_000);
+
+    assert_eq!(
+        client.preview_yield_tier(&1_000i128, &1_000u64),
+        crate::YieldResolution {
+            effective_yield_bps: 800,
+            matched_lock_secs: 0,
+        }
+    );
+    assert_contract_error(
+        client.try_preview_yield_tier(&1_000i128, &1_001u64),
+        EscrowError::CommitmentLockExceedsMaturity,
+    );
+}
+
+#[test]
 #[ignore = "triaged: commitment-lock path requires API reconciliation"]
 fn commitment_lock_within_maturity_is_accepted() {
     // now=1000, maturity=2000, lock=500 → claim_nb=1500 ≤ 2000  ✓
