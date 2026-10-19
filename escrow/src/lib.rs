@@ -496,6 +496,22 @@ pub const MAX_INVOICE_ID_STRING_LEN: u32 = 32;
 /// rejects the stale proposal with [`EscrowError::AdminProposalExpired`].
 pub const DEFAULT_ADMIN_PROPOSAL_VALIDITY_SECS: u64 = 604_800; // 7 days
 
+/// Maximum validity window allowed for [`StarfundEscrow::propose_admin`].
+///
+/// A custom `validity_window_secs` exceeding this cap is rejected with
+/// [`EscrowError::AdminProposalValidityTooLong`]. The 30-day ceiling ensures
+/// [`StarfundEscrow::recover_admin`] becomes executable within an operational
+/// timeframe and prevents indefinite deadlock if the nominated successor loses
+/// their key.
+pub const MAX_ADMIN_PROPOSAL_VALIDITY_SECS: u64 = 2_592_000; // 30 days
+
+/// Minimum validity window allowed for [`StarfundEscrow::propose_admin`].
+///
+/// A custom `validity_window_secs` below this floor is rejected with
+/// [`EscrowError::AdminProposalValidityTooShort`]. The 1-hour floor prevents
+/// proposals that expire before the pending admin can realistically act.
+pub const MIN_ADMIN_PROPOSAL_VALIDITY_SECS: u64 = 3_600; // 1 hour
+
 /// Default validity window for [`StarfundEscrow::propose_payer_recovery`] when no explicit window is supplied.
 ///
 /// After `ledger.timestamp() + DEFAULT_PAYER_PROPOSAL_VALIDITY_SECS`, [`StarfundEscrow::accept_payer_recovery`]
@@ -1077,6 +1093,34 @@ pub enum EscrowError {
     /// division edge case into [`StarfundEscrow::withdraw`] and
     /// [`StarfundEscrow::compute_investor_payout`]. Reject at the transition instead.
     PartialSettleNoFunds = 209,
+
+    // ── Issue #239: propose_admin validity-window bounds ─────────────────────
+
+    /// [`StarfundEscrow::propose_admin`] called with a `validity_window_secs` exceeding
+    /// [`MAX_ADMIN_PROPOSAL_VALIDITY_SECS`] (30 days). Uncapped windows could prevent
+    /// [`StarfundEscrow::recover_admin`] from ever becoming executable.
+    AdminProposalValidityTooLong = 268,
+
+    /// [`StarfundEscrow::propose_admin`] called with a `validity_window_secs` below
+    /// [`MIN_ADMIN_PROPOSAL_VALIDITY_SECS`] (1 hour). Windows shorter than the minimum
+    /// may expire before the pending admin can realistically respond.
+    AdminProposalValidityTooShort = 269,
+
+    // ── Issue #238: register_callback terminal-state guard ───────────────────
+
+    /// [`StarfundEscrow::register_callback`] or [`StarfundEscrow::execute_callback`]
+    /// called on an escrow that has reached a terminal lifecycle state (Settled = 2,
+    /// Withdrawn = 3, or Cancelled = 4). Callbacks may only be registered while the
+    /// escrow is active (Open = 0 or Funded = 1).
+    CallbackOnTerminalEscrow = 270,
+
+    // ── Issue #237: set_legal_hold idempotency ────────────────────────────────
+
+    /// [`StarfundEscrow::set_legal_hold`] called with an `active` value that matches
+    /// the current legal hold state. Emitting a redundant [`LegalHoldChanged`] event
+    /// or overwriting an unchanged storage key is a no-op; callers should check the
+    /// current hold state before calling.
+    LegalHoldStateUnchanged = 271,
 }
 
 #[inline(always)]
@@ -5039,14 +5083,15 @@ impl StarfundEscrow {
     ///
     /// # Arguments
     /// * `start` ΓÇö 0-based index into the append log to begin reading from.
-    /// * `limit` ΓÇö Maximum number of entries to return per call.  Clamped to
-    ///   [`MAX_ATTESTATION_READ_PAGE`] even if the caller requests more.
+    /// * `limit` ΓÇö Maximum number of entries to return per call. Must be in
+    ///   `1..=MAX_ATTESTATION_READ_PAGE`; values outside that range are rejected
+    ///   with [`EscrowError::AttestationReadLimitZero`] or
+    ///   [`EscrowError::AttestationReadLimitTooLarge`].
     ///
     /// # Returns
-    /// A `Vec<AttestationDigestInfo>` with at most `limit.min(MAX_ATTESTATION_READ_PAGE)`
-    /// entries.  Each entry carries both the 32-byte digest and its live revocation
-    /// flag.  Returns an empty `Vec` when `start >= log.len()`, when `limit == 0`,
-    /// or when the log is empty ΓÇö no panic in any of those cases.
+    /// A `Vec<AttestationDigestInfo>` with at most `limit` entries. Each entry
+    /// carries both the 32-byte digest and its live revocation flag. Returns an
+    /// empty `Vec` when `start >= log.len()` or when the log is empty.
     ///
     /// # Continuation
     /// To fetch the next page, pass `start + result.len()` as the new `start`.
@@ -5059,14 +5104,20 @@ impl StarfundEscrow {
     ///   query time; it may differ from earlier snapshots if `revoke_attestation_digest`
     ///   or `unrevoke_attestation_digest` was called in the interim.
     pub fn get_attestation_digests(env: Env, start: u32, limit: u32) -> Vec<AttestationDigestInfo> {
+        ensure(&env, limit > 0, EscrowError::AttestationReadLimitZero);
+        ensure(
+            &env,
+            limit <= MAX_ATTESTATION_READ_PAGE,
+            EscrowError::AttestationReadLimitTooLarge,
+        );
+
         let log = Self::get_attestation_append_log(env.clone());
         let len = log.len();
-        if start >= len || limit == 0 {
+        if start >= len {
             return Vec::new(&env);
         }
 
-        let actual_limit = limit.min(MAX_ATTESTATION_READ_PAGE);
-        let end = (start + actual_limit).min(len);
+        let end = (start + limit).min(len);
 
         let mut result = Vec::new(&env);
         for i in start..end {
@@ -5914,6 +5965,14 @@ impl StarfundEscrow {
     pub fn set_legal_hold(env: Env, active: bool, expected_nonce: u32) {
         let escrow = Self::load_escrow_require_admin(&env);
         Self::consume_admin_nonce(&env, expected_nonce);
+
+        // Idempotency guard: reject the call if the requested state matches the current state.
+        // This prevents spurious LegalHoldChanged events and unnecessary storage overwrites.
+        ensure(
+            &env,
+            active != Self::legal_hold_active(&env),
+            EscrowError::LegalHoldStateUnchanged,
+        );
 
         if !active && Self::legal_hold_active(&env) {
             let delay = Self::get_legal_hold_clear_delay(env.clone());
@@ -8736,7 +8795,12 @@ impl StarfundEscrow {
     /// # Errors
     /// Emits typed [`EscrowError`] codes when the escrow is uninitialized, the replacement is the
     /// same as the current admin, or the proposed address matches a still-pending proposal.
-    pub fn propose_admin(env: Env, new_admin: Address, expected_nonce: u32) -> Address {
+    pub fn propose_admin(
+        env: Env,
+        new_admin: Address,
+        expected_nonce: u32,
+        validity_window_secs: Option<u64>,
+    ) -> Address {
         let escrow = Self::load_escrow_require_admin(&env);
         Self::consume_admin_nonce(&env, expected_nonce);
 
@@ -8744,6 +8808,19 @@ impl StarfundEscrow {
             &env,
             escrow.admin != new_admin,
             EscrowError::NewAdminSameAsCurrent,
+        );
+
+        // Resolve the validity window, then validate it is within [MIN, MAX].
+        let window = validity_window_secs.unwrap_or(DEFAULT_ADMIN_PROPOSAL_VALIDITY_SECS);
+        ensure(
+            &env,
+            window >= MIN_ADMIN_PROPOSAL_VALIDITY_SECS,
+            EscrowError::AdminProposalValidityTooShort,
+        );
+        ensure(
+            &env,
+            window <= MAX_ADMIN_PROPOSAL_VALIDITY_SECS,
+            EscrowError::AdminProposalValidityTooLong,
         );
 
         let previous_pending: Option<Address> =
@@ -8766,7 +8843,7 @@ impl StarfundEscrow {
         let expiry = env
             .ledger()
             .timestamp()
-            .saturating_add(DEFAULT_ADMIN_PROPOSAL_VALIDITY_SECS);
+            .saturating_add(window);
 
         env.storage()
             .instance()
@@ -9556,7 +9633,8 @@ impl StarfundEscrow {
     ///
     /// # Errors
     /// - [`EscrowError::EscrowNotInitialized`] if escrow storage is missing.
-    /// - [`EscrowError::CallbackAfterCancellation`] if the escrow status is 4 (cancelled).
+    /// - [`EscrowError::CallbackOnTerminalEscrow`] if the escrow is not in an active lifecycle
+    ///   state (only Open = 0 or Funded = 1 are permitted).
     ///
     /// # Returns
     /// The allocated unique invocation nonce (`u64`).
@@ -9565,8 +9643,8 @@ impl StarfundEscrow {
 
         ensure(
             &env,
-            escrow.status != 4,
-            EscrowError::CallbackAfterCancellation,
+            escrow.status == 0 || escrow.status == 1,
+            EscrowError::CallbackOnTerminalEscrow,
         );
 
         let current_nonce: u64 = env

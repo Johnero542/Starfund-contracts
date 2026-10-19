@@ -3,7 +3,8 @@ use crate::{
     AdminAcceptedEvent, AdminProposalCancelled, AdminProposalSuperseded, AdminProposedEvent,
     DeprecatedTransferAdminUsed, EscrowCloseSnapshot, FundingStateChanged, FundingTargetUpdated,
     MaturityMaxHorizonRaised, PayerRotated, ProtocolFeeUpdated, RegistryRefRebound,
-    DEFAULT_MATURITY_MAX_HORIZON_SECS, MAX_INVOICE_AMOUNT,
+    DEFAULT_MATURITY_MAX_HORIZON_SECS, MAX_ADMIN_PROPOSAL_VALIDITY_SECS,
+    MAX_INVOICE_AMOUNT, MIN_ADMIN_PROPOSAL_VALIDITY_SECS,
 };
 
 use soroban_sdk::Event;
@@ -4406,4 +4407,127 @@ fn test_set_storage_limit_nonce_replay_and_event() {
         }
         .to_xdr(&env, &contract_id)
     );
+}
+
+// ── Issue #239: propose_admin validity-window bounds ─────────────────────────
+//
+// propose_admin must reject custom validity windows that exceed
+// MAX_ADMIN_PROPOSAL_VALIDITY_SECS (30 days) or fall below
+// MIN_ADMIN_PROPOSAL_VALIDITY_SECS (1 hour).
+
+/// A custom validity window exceeding MAX_ADMIN_PROPOSAL_VALIDITY_SECS must
+/// revert with [`EscrowError::AdminProposalValidityTooLong`].
+#[test]
+fn test_propose_admin_validity_window_too_long_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    let new_admin = Address::generate(&env);
+    let too_long = MAX_ADMIN_PROPOSAL_VALIDITY_SECS + 1;
+
+    assert_contract_error(
+        client.try_propose_admin(&new_admin, &0u32, &Some(too_long)),
+        EscrowError::AdminProposalValidityTooLong,
+    );
+    // No pending admin must have been set.
+    assert!(client.get_pending_admin().is_none());
+}
+
+/// A custom validity window at exactly MAX_ADMIN_PROPOSAL_VALIDITY_SECS must succeed.
+#[test]
+fn test_propose_admin_validity_window_at_max_boundary_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    let new_admin = Address::generate(&env);
+    let at_max = MAX_ADMIN_PROPOSAL_VALIDITY_SECS;
+
+    client.propose_admin(&new_admin, &0u32, &Some(at_max));
+    assert_eq!(client.get_pending_admin(), Some(new_admin));
+    assert_eq!(
+        client.get_pending_admin_expiry(),
+        Some(at_max),  // timestamp starts at 0 in tests
+    );
+}
+
+/// A custom validity window below MIN_ADMIN_PROPOSAL_VALIDITY_SECS must
+/// revert with [`EscrowError::AdminProposalValidityTooShort`].
+#[test]
+fn test_propose_admin_validity_window_too_short_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    let new_admin = Address::generate(&env);
+    let too_short = MIN_ADMIN_PROPOSAL_VALIDITY_SECS - 1;
+
+    assert_contract_error(
+        client.try_propose_admin(&new_admin, &0u32, &Some(too_short)),
+        EscrowError::AdminProposalValidityTooShort,
+    );
+    assert!(client.get_pending_admin().is_none());
+}
+
+/// A custom validity window at exactly MIN_ADMIN_PROPOSAL_VALIDITY_SECS must succeed.
+#[test]
+fn test_propose_admin_validity_window_at_min_boundary_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    let new_admin = Address::generate(&env);
+    let at_min = MIN_ADMIN_PROPOSAL_VALIDITY_SECS;
+
+    client.propose_admin(&new_admin, &0u32, &Some(at_min));
+    assert_eq!(client.get_pending_admin(), Some(new_admin));
+}
+
+/// The default window (None) must succeed and falls within [MIN, MAX].
+#[test]
+fn test_propose_admin_default_window_within_bounds_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    let new_admin = Address::generate(&env);
+    client.propose_admin(&new_admin, &0u32, &None);
+    assert!(client.get_pending_admin().is_some());
+}
+
+/// recover_admin is guaranteed to become executable once the bounded validity
+/// window has elapsed. The cap ensures expiry is always reachable.
+#[test]
+fn test_recover_admin_reachable_after_bounded_window_expires() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    env.ledger().set_timestamp(1_000);
+    let new_admin = Address::generate(&env);
+    // Use the maximum allowed window.
+    client.propose_admin(&new_admin, &0u32, &Some(MAX_ADMIN_PROPOSAL_VALIDITY_SECS));
+
+    let expiry = client.get_pending_admin_expiry().expect("expiry set");
+    assert_eq!(expiry, 1_000 + MAX_ADMIN_PROPOSAL_VALIDITY_SECS);
+
+    // Before expiry — recover_admin must fail.
+    env.ledger().set_timestamp(expiry);
+    assert_contract_error(
+        client.try_recover_admin(&soroban_sdk::String::from_str(&env, "not yet")),
+        EscrowError::AdminRecoveryNotExpired,
+    );
+
+    // After expiry — recover_admin must succeed.
+    env.ledger().set_timestamp(expiry + 1);
+    let recovered = client.recover_admin(&soroban_sdk::String::from_str(&env, "recovery"));
+    assert_eq!(recovered, admin);
+    assert!(client.get_pending_admin().is_none());
 }
