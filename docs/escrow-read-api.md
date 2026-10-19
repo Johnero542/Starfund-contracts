@@ -711,11 +711,9 @@ when negative.
 - Emits [`EscrowError::EscrowNotInitialized`] / [`EscrowError::FundingTokenNotSet`]
   only when the escrow has not been initialized.
 
-**Security note:** in settled (`2`) and withdrawn (`3`) states `distributed_principal`
-is `0` by design, so `outstanding_liability` reflects the full `funded_amount` and the
-reported `surplus` is never larger than what `sweep_terminal_dust` would actually
-permit (that guard only applies the floor in the cancelled state `4`). The view is
-therefore conservative and can never over-report sweepable funds.
+**Security note:** in withdrawn (`3`) and cancelled (`4`) states, `outstanding_liability`
+uses the same `DistributedPrincipal` floor as `sweep_terminal_dust`. In settled (`2`) state
+the view remains informational; the dust sweep does not apply this principal floor.
 
 ---
 

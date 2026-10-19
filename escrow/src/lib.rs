@@ -1464,8 +1464,9 @@ pub enum DataKey {
     /// Set to `true` once an investor's principal has been refunded in a cancelled escrow.
     /// Absent ΓçÆ `false`. Written once; prevents double-refund.
     InvestorRefunded(Address),
-    /// Running total of principal already returned to investors via [`StarfundEscrow::refund`].
-    /// Absent ΓçÆ `0`. Incremented atomically with each successful refund transfer.
+    /// Running total of principal already distributed via [`StarfundEscrow::release`],
+    /// [`StarfundEscrow::withdraw`], or [`StarfundEscrow::refund`].
+    /// Absent ΓçÆ `0`. Incremented atomically with each successful transfer.
     /// Used by [`StarfundEscrow::sweep_terminal_dust`] to compute outstanding liabilities:
     /// `outstanding = funded_amount - distributed_principal`.
     DistributedPrincipal,
@@ -3796,9 +3797,9 @@ impl StarfundEscrow {
     /// be swept as dust.
     ///
     /// # Liability floor invariant
-    /// In **cancelled** (status 4) escrows, the sweep is rejected if it would reduce the
-    /// contract's token balance below the amount still owed to investors who have not yet
-    /// called [`StarfundEscrow::refund`]:
+    /// In **withdrawn** (status 3) and **cancelled** (status 4) escrows, the sweep is
+    /// rejected if it would reduce the contract's token balance below the amount not yet
+    /// distributed:
     ///
     /// ```text
     /// outstanding = funded_amount - distributed_principal
@@ -3806,11 +3807,12 @@ impl StarfundEscrow {
     /// ```
     ///
     /// `distributed_principal` ([`DataKey::DistributedPrincipal`]) is incremented atomically
-    /// by [`StarfundEscrow::refund`] each time an investor's principal is returned. This makes
-    /// the invariant computable on-chain without iterating over all investor addresses.
+    /// by [`StarfundEscrow::release`], [`StarfundEscrow::withdraw`], and
+    /// [`StarfundEscrow::refund`] as funds are distributed. This makes the invariant computable
+    /// on-chain without iterating over all investor addresses.
     ///
-    /// In **settled** (2) and **withdrawn** (3) states, disbursement is off-chain and this
-    /// floor does not apply.
+    /// In **settled** (2), payouts use the investor-claim path and this principal floor does
+    /// not apply.
     ///
     /// # Authorization
     /// The configured **treasury** account must authorize this call; the admin cannot sweep unless
@@ -3852,17 +3854,12 @@ impl StarfundEscrow {
         let sweep_amt = amount.min(balance);
         ensure(&env, sweep_amt > 0, EscrowError::EffectiveSweepAmountZero);
 
-        // Liability floor (cancelled escrows only): sweep must not reduce the balance below
-        // principal still owed to investors who have not yet called refund().
-        //
-        // In settled (2) and withdrawn (3) states, disbursement is off-chain and
-        // distributed_principal stays 0, so the floor is not applicable there.
-        // In cancelled (4) state, refund() is the on-chain redemption path and increments
-        // distributed_principal atomically, making the invariant computable here.
+        // Liability floor for withdrawn and cancelled escrows: preserve all principal not yet
+        // distributed through release/withdraw or refund, respectively.
         //
         // outstanding = funded_amount - distributed_principal
         // Invariant: balance - sweep_amt >= outstanding
-        if escrow.status == 4 {
+        if matches!(escrow.status, 3 | 4) {
             let distributed: i128 = env
                 .storage()
                 .instance()
@@ -7645,19 +7642,19 @@ impl StarfundEscrow {
         // State transition and accounting (checks-effects-interactions). `DistributedPrincipal`
         // advances by the full gross `amount` (net + fee), keeping the liability accounting
         // consistent regardless of how principal is split.
+        let prev_distributed: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DistributedPrincipal)
+            .unwrap_or(0);
+        env.storage().instance().set(
+            &DataKey::DistributedPrincipal,
+            &prev_distributed.saturating_add(amount),
+        );
+
         if is_final {
             next_escrow.status = 3;
             env.storage().instance().set(&DataKey::Escrow, &next_escrow);
-
-            let prev_distributed: i128 = env
-                .storage()
-                .instance()
-                .get(&DataKey::DistributedPrincipal)
-                .unwrap_or(0);
-            env.storage().instance().set(
-                &DataKey::DistributedPrincipal,
-                &prev_distributed.saturating_add(amount),
-            );
 
             FinalRelease {
                 name: symbol_short!("fin_rel"),
@@ -9530,10 +9527,11 @@ impl StarfundEscrow {
             .unwrap_or(false)
     }
 
-    /// Total principal already returned to investors via [`StarfundEscrow::refund`].
+    /// Total principal already distributed via [`StarfundEscrow::release`],
+    /// [`StarfundEscrow::withdraw`], or [`StarfundEscrow::refund`].
     ///
     /// Used by [`StarfundEscrow::sweep_terminal_dust`] to compute outstanding liabilities.
-    /// Absent ΓçÆ `0` (no refunds have occurred).
+    /// Absent ΓçÆ `0` (no principal has been distributed).
     pub fn get_distributed_principal(env: Env) -> i128 {
         env.storage()
             .instance()
@@ -9562,12 +9560,11 @@ impl StarfundEscrow {
     /// surplus               = token_balance - outstanding_liability
     /// ```
     ///
-    /// so a caller's view of "what may be swept" never disagrees with the on-chain
-    /// invariant. In settled (`2`) and withdrawn (`3`) states `distributed_principal`
-    /// stays `0` by design, so `outstanding_liability` reflects the full
-    /// `funded_amount`; the reported `surplus` is therefore never larger than what
-    /// `sweep_terminal_dust` would actually permit (it only applies the floor in the
-    /// cancelled state `4`). `surplus` is negative in a deficit.
+    /// In withdrawn (`3`) and cancelled (`4`) states, this is the same floor enforced by
+    /// `sweep_terminal_dust`. `release`, `withdraw`, and `refund` each increment
+    /// `distributed_principal` atomically with their transfers. In settled (`2`) state, the
+    /// result is informational; dust sweeping does not apply this principal floor.
+    /// `surplus` is negative in a deficit.
     ///
     /// This is a pure read: no authorization, no storage writes. All arithmetic is
     /// saturating, so the view cannot panic on extreme balances or amounts.
