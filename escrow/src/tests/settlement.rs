@@ -22,8 +22,8 @@ use super::{
     install_stellar_asset_token, setup, StellarTestToken, MAX_DUST_SWEEP_AMOUNT, TARGET,
 };
 use crate::{
-    EscrowError, EscrowSettled, InvoiceEscrow, StarfundEscrow, SettlementConfig,
-    SettlementReadiness, SettlementResult, SmeWithdrew, YieldTier,
+    EscrowError, EscrowSettled, FundingStateChanged, InvoiceEscrow, StarfundEscrow,
+    SettlementConfig, SettlementReadiness, SettlementResult, SmeWithdrew, YieldTier,
 };
 use soroban_sdk::{
     symbol_short,
@@ -1576,8 +1576,11 @@ fn test_partial_settle_sme_happy_path() {
     let investor = Address::generate(&env);
     client.fund(&investor, &(TARGET / 2));
 
+    let invoice_id = client.get_escrow().invoice_id;
+    let ledger_timestamp = env.ledger().timestamp();
     // SME settles early
     client.partial_settle(&sme);
+    let events = env.events().all();
 
     let escrow = client.get_escrow();
     assert_eq!(
@@ -1585,6 +1588,19 @@ fn test_partial_settle_sme_happy_path() {
         "Status must be 1 (funded/settleable) after partial_settle"
     );
     assert_eq!(escrow.funded_amount, TARGET / 2);
+    assert!(events.events().contains(
+        &FundingStateChanged {
+            name: symbol_short!("fund_chg"),
+            invoice_id,
+            from_status: 0,
+            to_status: 1,
+            funded_amount: TARGET / 2,
+            funding_target: TARGET,
+            ledger_timestamp,
+            trigger: symbol_short!("part_set"),
+        }
+        .to_xdr(&env, &client.address)
+    ));
 }
 
 #[test]

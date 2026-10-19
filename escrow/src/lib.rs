@@ -2362,7 +2362,8 @@ pub struct EscrowPartialSettle {
 ///   [`FundingCloseSnapshot::funding_target`]).
 /// - `ledger_timestamp`: [`Env::ledger`] timestamp at the moment of transition.
 /// - `trigger`: short routing symbol identifying which entrypoint caused the transition:
-///   `tgt_lower` for [`StarfundEscrow::update_funding_target`].
+///   `tgt_lower` for [`StarfundEscrow::update_funding_target`], or `part_set` for
+///   [`StarfundEscrow::partial_settle`].
 #[contractevent]
 pub struct FundingStateChanged {
     #[topic]
@@ -7359,6 +7360,18 @@ impl StarfundEscrow {
         }
 
         env.storage().instance().set(&DataKey::Escrow, &escrow);
+
+        FundingStateChanged {
+            name: symbol_short!("fund_chg"),
+            invoice_id: escrow.invoice_id.clone(),
+            from_status: 0,
+            to_status: 1,
+            funded_amount: escrow.funded_amount,
+            funding_target: escrow.funding_target,
+            ledger_timestamp: env.ledger().timestamp(),
+            trigger: symbol_short!("part_set"),
+        }
+        .publish(&env);
 
         EscrowPartialSettle {
             name: symbol_short!("part_set"),
