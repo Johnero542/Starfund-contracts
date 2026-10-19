@@ -333,6 +333,9 @@ impl StarfundEscrow {
 /// Default maximum maturity horizon in seconds (~5 years) when no explicit horizon is configured.
 pub const DEFAULT_MATURITY_MAX_HORIZON_SECS: u64 = 157_680_000; // ~5 years (365.25 * 24 * 3600 * 5)
 
+/// Minimum interval between a funding deadline and a non-zero maturity timestamp (30 days).
+pub const MIN_MATURITY_AFTER_FUNDING_DEADLINE_SECS: u64 = 2_592_000;
+
 // ---------------------------------------------------------------------------
 // Bounded fee schedule
 // ---------------------------------------------------------------------------
@@ -944,6 +947,8 @@ pub enum EscrowError {
     WithdrawNetArithmeticUnderflow = 217,
     /// [`StarfundEscrow::init`] rejected a `funding_deadline` at or after maturity.
     FundingDeadlineAtOrAfterMaturity = 218,
+    /// [`StarfundEscrow::update_maturity`] set maturity less than 30 days after the funding deadline.
+    MaturityTooCloseToFundingDeadline = 261,
 
     /// [`StarfundEscrow::settle_batch`] received an empty escrow addresses vector.
     SettlementBatchEmpty = 223,
@@ -8212,6 +8217,7 @@ impl StarfundEscrow {
     /// - [`EscrowError::MaturityInPast`] if `new_maturity` is in the past and non-zero.
     /// - [`EscrowError::MaturityExceedsMaxHorizon`] if `new_maturity` exceeds current max horizon.
     /// - [`EscrowError::FundingDeadlineAtOrAfterMaturity`] if a funding deadline is configured and `new_maturity <= deadline`.
+    /// - [`EscrowError::MaturityTooCloseToFundingDeadline`] if `new_maturity` is less than 30 days after the funding deadline.
     pub fn update_maturity(env: Env, new_maturity: u64, expected_nonce: u32) -> InvoiceEscrow {
         let mut escrow = Self::load_escrow_require_admin(&env);
         Self::consume_admin_nonce(&env, expected_nonce);
@@ -8236,6 +8242,12 @@ impl StarfundEscrow {
                 &env,
                 deadline < new_maturity,
                 EscrowError::FundingDeadlineAtOrAfterMaturity,
+            );
+            ensure(
+                &env,
+                new_maturity.saturating_sub(deadline)
+                    >= MIN_MATURITY_AFTER_FUNDING_DEADLINE_SECS,
+                EscrowError::MaturityTooCloseToFundingDeadline,
             );
         }
 
