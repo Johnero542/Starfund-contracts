@@ -6813,9 +6813,11 @@ fn test_extend_funding_deadline_rejects_settled_status() {
     init_with_funding_deadline(&env, &client, &admin, &sme, initial, 0);
 
     let token = client.get_funding_token();
+    let token_admin = StellarAssetClient::new(&env, &token);
     let investor = Address::generate(&env);
-    StellarAssetClient::new(&env, &token).mint(&investor, &TARGET);
+    token_admin.mint(&investor, &TARGET);
     client.fund(&investor, &TARGET);
+    token_admin.mint(&client.address, &(TARGET * 800 / 10_000));
     client.settle();
     assert_eq!(client.get_escrow().status, 2);
 
