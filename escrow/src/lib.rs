@@ -1070,6 +1070,9 @@ pub enum EscrowError {
     NothingToWithdraw = 266,
     /// [`StarfundEscrow::cancel_funding`] called while a dispute remains active.
     DisputeBlocksCancelFunding = 267,
+    /// [`StarfundEscrow::open_dispute`] called after the escrow lifecycle terminated
+    /// (status 3 = withdrawn or status 4 = cancelled).
+    DisputeEscrowTerminated = 268,
     /// [`StarfundEscrow::partial_settle`] called while `funded_amount == 0`.
     ///
     /// Closing funding early on an escrow with no investor contributions would write a
@@ -4208,6 +4211,11 @@ impl StarfundEscrow {
             &env,
             caller == escrow.admin,
             EscrowError::DisputeOpenUnauthorized,
+        );
+        ensure(
+            &env,
+            escrow.status <= 2,
+            EscrowError::DisputeEscrowTerminated,
         );
         ensure(
             &env,

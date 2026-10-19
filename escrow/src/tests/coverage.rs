@@ -302,6 +302,7 @@ fn escrow_error_discriminants_are_unique() {
         EscrowError::DisputeCloseUnauthorized,
         EscrowError::DisputeAlreadyOpen,
         EscrowError::DisputeNotOpen,
+        EscrowError::DisputeEscrowTerminated,
         EscrowError::CallbackWrongOrigin,
         EscrowError::CallbackWrongNonce,
         EscrowError::CallbackWrongPhase,

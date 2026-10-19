@@ -60,6 +60,32 @@ fn release_before_dispute_succeeds() {
 }
 
 #[test]
+fn disputes_cannot_open_after_withdrawal_or_cancellation() {
+    let (_, withdrawn_client, withdrawn_admin, _) = funded_client();
+    withdrawn_client.withdraw();
+    assert_eq!(withdrawn_client.get_escrow().status, 3);
+    assert_contract_error(
+        withdrawn_client.try_open_dispute(&withdrawn_admin),
+        EscrowError::DisputeEscrowTerminated,
+    );
+    assert!(!withdrawn_client.is_dispute_active());
+    assert_eq!(withdrawn_client.get_dispute_record(), None);
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let (cancelled_client, admin, sme) = setup(&env);
+    default_init(&cancelled_client, &env, &admin, &sme);
+    cancelled_client.cancel_funding(&0u32);
+    assert_eq!(cancelled_client.get_escrow().status, 4);
+    assert_contract_error(
+        cancelled_client.try_open_dispute(&admin),
+        EscrowError::DisputeEscrowTerminated,
+    );
+    assert!(!cancelled_client.is_dispute_active());
+    assert_eq!(cancelled_client.get_dispute_record(), None);
+}
+
+#[test]
 fn release_before_funding_is_rejected() {
     // Status 0 (open) is not withdrawable: `withdraw()` requires status 1.
     let env = Env::default();
