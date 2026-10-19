@@ -9348,7 +9348,8 @@ impl StarfundEscrow {
     ///
     /// When the investor's contribution reaches zero the `DataKey::UniqueFunderCount` is
     /// decremented by one (floor: 0, via saturating arithmetic). Status always remains 0;
-    /// `unfund` never triggers a state transition in either direction.
+    /// `unfund` never triggers a state transition in either direction. Any withdrawal
+    /// invalidates the investor's previous commitment tier for the remaining contribution.
     ///
     /// # Parameters
     /// - `investor`: The address whose contribution is being reduced. Must match `require_auth`.
@@ -9398,6 +9399,7 @@ impl StarfundEscrow {
 
         // 6. Effects ΓÇö update contribution (checks-effects-interactions).
         Self::set_persistent_investor_contribution(&env, investor.clone(), remaining_contribution);
+        Self::clear_persistent_investor_tier_state(&env, investor.clone());
 
         // 7. Clear the investor registration when the contribution reaches zero.
         // This keeps the paginated investor index and the distinct-funder count aligned,
@@ -9413,7 +9415,6 @@ impl StarfundEscrow {
                 .instance()
                 .set(&keys::unique_funder_count(), &cur.saturating_sub(1));
             Self::remove_investor_from_index(&env, &investor);
-            Self::clear_persistent_investor_tier_state(&env, investor.clone());
         }
 
         // 8. Persist updated escrow.

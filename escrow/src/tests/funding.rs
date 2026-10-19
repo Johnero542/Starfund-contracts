@@ -7228,6 +7228,50 @@ fn test_unfund_partial() {
 }
 
 #[test]
+fn test_partial_unfund_clears_commitment_tier_state() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let investor = Address::generate(&env);
+    let (token, treasury) = free_addresses(&env);
+    let mut tiers = SorobanVec::new(&env);
+    tiers.push_back(YieldTier {
+        min_lock_secs: 30,
+        yield_bps: 900,
+    });
+    client.init(
+        &admin,
+        &String::from_str(&env, "UFLOCK1"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &0u64,
+        &token,
+        &None,
+        &treasury,
+        &Some(tiers),
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+
+    client.fund_with_commitment(&investor, &1_000i128, &60u64);
+    assert_eq!(client.get_investor_yield_bps(&investor), 900);
+    assert_eq!(client.get_investor_claim_not_before(&investor), 60);
+
+    client.unfund(&investor, &400i128);
+
+    assert_eq!(client.get_contribution(&investor), 600);
+    assert_eq!(client.get_investor_yield_bps(&investor), 800);
+    assert_eq!(client.get_investor_claim_not_before(&investor), 0);
+}
+
+#[test]
 fn test_unfund_full() {
     let env = Env::default();
     let (client, admin, sme) = setup(&env);
