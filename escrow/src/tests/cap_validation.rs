@@ -377,6 +377,58 @@ fn test_min_contribution_floor_follow_on_below_value_rejected() {
 }
 
 #[test]
+fn test_fund_batch_rejects_below_floor_entry_atomically() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = deploy(&env);
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    let floor = 500i128;
+    client.init(
+        &admin,
+        &String::from_str(&env, "BATCH_FLOOR"),
+        &sme,
+        &100_000_000_000i128,
+        &800i64,
+        &0u64,
+        &Address::generate(&env),
+        &None,
+        &Address::generate(&env),
+        &None,
+        &Some(floor),
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+
+    let valid_investor = Address::generate(&env);
+    let dust_investor = Address::generate(&env);
+    let entries = SorobanVec::from_array(
+        &env,
+        [
+            (valid_investor.clone(), 1_000i128),
+            (dust_investor.clone(), 1i128),
+        ],
+    );
+
+    assert_contract_error(
+        client.try_fund_batch(&entries),
+        crate::EscrowError::FundingBelowMinContribution,
+    );
+
+    assert_eq!(client.get_escrow().funded_amount, 0);
+    assert_eq!(client.get_contribution(&valid_investor), 0);
+    assert_eq!(client.get_contribution(&dust_investor), 0);
+    assert_eq!(client.get_unique_funder_count(), 0);
+    assert_eq!(client.get_investors(&0, &10).len(), 0);
+}
+
+#[test]
 fn test_per_investor_cap_exact_cumulative_value_accepted() {
     let env = Env::default();
     env.mock_all_auths();
