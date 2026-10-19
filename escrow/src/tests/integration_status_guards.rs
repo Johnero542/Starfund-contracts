@@ -49,15 +49,14 @@ fn setup_open(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     (client, admin, sme, tok, tre)
 }
 
 /// Move the escrow to cancelled status (status == 4).
 fn cancel(client: &StarfundEscrowClient<'_>, _admin: &Address) {
-    client.cancel_funding();
+    client.cancel_funding(&0u32);
 }
 
 // ---------------------------------------------------------------------------
@@ -140,9 +139,8 @@ fn test_lower_max_unique_investors_rejects_when_cancelled() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     cancel(&client, &admin);
     let result = client.try_lower_max_unique_investors(&5u32);
     assert_contract_error(result, EscrowError::CapLowerNotOpen);
@@ -176,9 +174,8 @@ fn test_lower_min_contribution_floor_rejects_when_cancelled() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     cancel(&client, &admin);
     let result = client.try_lower_min_contribution_floor(&50i128);
     assert_contract_error(result, EscrowError::FloorLowerNotOpen);
@@ -194,7 +191,7 @@ fn test_cancel_funding_rejects_when_already_cancelled() {
     let env = make_env();
     let (client, admin, _sme, _tok, _tre) = setup_open(&env);
     cancel(&client, &admin);
-    let result = client.try_cancel_funding();
+    let result = client.try_cancel_funding(&0u32);
     assert_contract_error(result, EscrowError::CancelFundingNotOpen);
 }
 
@@ -248,9 +245,8 @@ fn test_lower_max_unique_investors_succeeds_when_open() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     // Lowering from 10 to 5 should succeed while open.
     client.lower_max_unique_investors(&5u32);
 }

@@ -8,17 +8,17 @@ use super::*;
 /// released principal to the SME and therefore needs an actual token balance on
 /// the contract.
 fn funded_client() -> (Env, StarfundEscrowClient<'static>, Address, Address) {
-    let env = Env::default();
+    let env = Box::leak(Box::new(Env::default()));
     env.mock_all_auths();
-    let sac = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let sac = env.register_stellar_asset_contract_v2(Address::generate(env));
     let token = sac.address();
-    let sac_admin = StellarAssetClient::new(&env, &token);
+    let sac_admin = StellarAssetClient::new(env, &token);
 
-    let (client, admin, sme) = setup(&env);
-    let (_, treasury) = free_addresses(&env);
+    let (client, admin, sme) = setup(env);
+    let (_, treasury) = free_addresses(env);
     client.init(
         &admin,
-        &String::from_str(&env, "DISPUTE001"),
+        &String::from_str(env, "DISPUTE001"),
         &sme,
         &100_000_000_000i128,
         &100i64,
@@ -34,15 +34,13 @@ fn funded_client() -> (Env, StarfundEscrowClient<'static>, Address, Address) {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
-    let investor = Address::generate(&env);
+        &None,
+        &None);
+    let investor = Address::generate(env);
     sac_admin.mint(&investor, &100_000_000_000i128);
-    // Funding the full `funding_target` moves the escrow to status 1 (Funded).
     client.fund(&investor, &100_000_000_000i128);
     sac_admin.mint(&client.address, &100_000_000_000i128);
-    (env, client, admin, sme)
+    (env.clone(), client, admin, sme)
 }
 
 #[test]
@@ -87,9 +85,8 @@ fn release_before_funding_is_rejected() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     let investor = Address::generate(&env);
     sac_admin.mint(&investor, &90_000_000_000i128);
     client.fund(&investor, &90_000_000_000i128);
@@ -133,9 +130,8 @@ fn close_during_dispute_is_blocked() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.open_dispute(&admin);
 
     let result = client.try_close_escrow();

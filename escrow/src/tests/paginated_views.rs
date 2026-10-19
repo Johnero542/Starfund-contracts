@@ -108,9 +108,8 @@ fn do_init(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 }
 
 // ── get_investors ─────────────────────────────────────────────────────────────
@@ -181,9 +180,8 @@ fn get_investors_first_page() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Fund with 5 investors
     let mut investors = soroban_sdk::Vec::new(&env);
@@ -234,9 +232,8 @@ fn get_investors_continuation_page() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let mut investors = soroban_sdk::Vec::new(&env);
     for _ in 0..5 {
@@ -285,9 +282,8 @@ fn get_investors_start_past_end_returns_empty() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let inv = Address::generate(&env);
     sac_admin.mint(&inv, &200_000_000i128);
@@ -322,9 +318,8 @@ fn setup_allowlist_escrow(env: &Env) -> (crate::StarfundEscrowClient<'_>, Addres
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     (client, admin, sme)
 }
 
@@ -343,7 +338,7 @@ fn get_allowlisted_investors_zero_limit_returns_empty() {
     env.mock_all_auths();
     let (client, admin, _sme) = setup_allowlist_escrow(&env);
     let inv = Address::generate(&env);
-    client.set_investor_allowlisted(&inv, &true);
+    client.set_investor_allowlisted(&inv, &true, &0u32);
     let result = client.get_allowlisted_investors(&0, &0);
     assert_eq!(result.len(), 0);
 }
@@ -354,7 +349,7 @@ fn get_allowlisted_investors_start_past_end_returns_empty() {
     env.mock_all_auths();
     let (client, admin, _sme) = setup_allowlist_escrow(&env);
     let inv = Address::generate(&env);
-    client.set_investor_allowlisted(&inv, &true);
+    client.set_investor_allowlisted(&inv, &true, &0u32);
     // Only 1 investor; start=5 is past the end
     let result = client.get_allowlisted_investors(&5, &10);
     assert_eq!(result.len(), 0);
@@ -369,7 +364,7 @@ fn get_allowlisted_investors_first_page() {
     let mut addrs = soroban_sdk::Vec::new(&env);
     for _ in 0..5 {
         let addr = Address::generate(&env);
-        client.set_investor_allowlisted(&addr, &true);
+        client.set_investor_allowlisted(&addr, &true, &0u32);
         addrs.push_back(addr);
     }
 
@@ -389,7 +384,7 @@ fn get_allowlisted_investors_continuation_page() {
     let mut addrs = soroban_sdk::Vec::new(&env);
     for _ in 0..5 {
         let addr = Address::generate(&env);
-        client.set_investor_allowlisted(&addr, &true);
+        client.set_investor_allowlisted(&addr, &true, &0u32);
         addrs.push_back(addr);
     }
 
@@ -409,12 +404,12 @@ fn get_allowlisted_investors_excludes_revoked_addresses() {
     let addr_a = Address::generate(&env);
     let addr_b = Address::generate(&env);
     let addr_c = Address::generate(&env);
-    client.set_investor_allowlisted(&addr_a, &true);
-    client.set_investor_allowlisted(&addr_b, &true);
-    client.set_investor_allowlisted(&addr_c, &true);
+    client.set_investor_allowlisted(&addr_a, &true, &0u32);
+    client.set_investor_allowlisted(&addr_b, &true, &0u32);
+    client.set_investor_allowlisted(&addr_c, &true, &0u32);
 
     // Revoke addr_b
-    client.set_investor_allowlisted(&addr_b, &false);
+    client.set_investor_allowlisted(&addr_b, &false, &0u32);
 
     // Full page scan should only return addr_a and addr_c
     let result = client.get_allowlisted_investors(&0, &10);
@@ -448,9 +443,8 @@ fn setup_attestation_escrow(env: &Env) -> (crate::StarfundEscrowClient<'_>, Addr
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     (client, admin)
 }
 

@@ -35,10 +35,10 @@ fn test_update_maturity_emits_event() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.update_maturity(&2000u64, &0u32);
+    let all_events = env.events().all();
     assert_eq!(
         all_events.events().last().unwrap().clone(),
         crate::MaturityUpdatedEvent {
@@ -74,9 +74,8 @@ fn test_update_maturity_unchanged_panics() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.update_maturity(&2000u64, &0u32);
 }
 
@@ -102,9 +101,8 @@ fn test_update_maturity_success() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     let updated = client.update_maturity(&2000u64, &0u32);
     assert_eq!(updated.maturity, 2000u64);
     assert_eq!(updated.status, 0);
@@ -134,9 +132,8 @@ fn test_update_maturity_wrong_state() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &1_000i128);
     client.update_maturity(&2000u64, &0u32);
 }
@@ -167,9 +164,8 @@ fn test_update_maturity_unauthorized() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     env.mock_auths(&[]);
     client.update_maturity(&2000u64, &0u32);
 }
@@ -198,9 +194,8 @@ fn test_set_protocol_fee_bps_updates_storage_and_emits_event() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let updated = client.set_protocol_fee_bps(&2500i64);
     assert_eq!(updated, 2500i64);
@@ -243,9 +238,8 @@ fn test_set_protocol_fee_bps_rejects_out_of_range_values() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     assert_contract_error(
         client.try_set_protocol_fee_bps(&10001i64),
@@ -281,9 +275,8 @@ fn test_set_protocol_fee_bps_requires_admin_auth() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     env.mock_auths(&[]);
     client.set_protocol_fee_bps(&1500i64);
@@ -312,9 +305,8 @@ fn test_propose_admin_sets_pending_without_changing_admin() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     let pending = client.propose_admin(&new_admin, &0u32, &None);
     assert_eq!(pending, new_admin);
     assert_eq!(client.get_pending_admin(), Some(new_admin));
@@ -344,9 +336,8 @@ fn test_accept_admin_promotes_pending_and_clears_pending() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     client.propose_admin(&new_admin, &0u32, &None);
     let updated = client.accept_admin();
@@ -379,9 +370,8 @@ fn test_transfer_admin_deprecated_shim_only_proposes() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let unchanged = client.transfer_admin(&new_admin, &0u32);
     assert_eq!(unchanged.admin, admin);
@@ -615,9 +605,8 @@ fn test_transfer_admin_same_address_panics() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.propose_admin(&admin, &0u32, &None);
 }
 
@@ -1329,9 +1318,8 @@ fn test_read_model_summary_includes_optional_admin_fields() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let summary = client.get_escrow_summary();
 
@@ -1367,9 +1355,8 @@ fn test_record_collateral_stored_and_does_not_block_settle() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     let c = client.record_sme_collateral_commitment(&symbol_short!("USDC"), &5000i128);
     assert_eq!(c.amount, 5000i128);
     assert_eq!(c.asset, symbol_short!("USDC"));
@@ -1403,9 +1390,8 @@ fn test_collateral_zero_panics() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.record_sme_collateral_commitment(&symbol_short!("XLM"), &0i128);
 }
 
@@ -1432,9 +1418,8 @@ fn test_collateral_requires_sme_auth() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     env.mock_auths(&[]);
     client.record_sme_collateral_commitment(&symbol_short!("XLM"), &100i128);
 }
@@ -1462,9 +1447,8 @@ fn test_legal_hold_blocks_settle_withdraw_claim_and_fund() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &TARGET);
     client.set_legal_hold(&true, &0u32);
     assert!(client.get_legal_hold());
@@ -1519,9 +1503,8 @@ fn test_legal_hold_blocks_new_funds_when_open() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.set_legal_hold(&true, &0u32);
     client.fund(&investor, &1i128);
 }
@@ -1565,9 +1548,8 @@ fn test_update_funding_target_by_admin_succeeds() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let updated = client.update_funding_target(&10_000i128, &0u32);
     assert_eq!(updated.funding_target, 10_000i128);
@@ -1602,9 +1584,8 @@ fn test_update_funding_target_by_non_admin_panics() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     env.mock_auths(&[]);
     client.update_funding_target(&10_000i128, &0u32);
@@ -1640,9 +1621,8 @@ fn test_update_funding_target_fails_when_funded() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &5_000i128);
     client.update_funding_target(&10_000i128, &0u32);
 }
@@ -1677,9 +1657,8 @@ fn test_update_funding_target_below_funded_panics() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &4_000i128);
     client.update_funding_target(&3_000i128, &0u32);
 }
@@ -1713,9 +1692,8 @@ fn test_update_funding_target_zero_panics() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.update_funding_target(&0i128, &0u32);
 }
 
@@ -1755,9 +1733,8 @@ fn test_update_funding_target_event_fields() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     client.update_funding_target(&9_000i128, &0u32);
 
@@ -1805,9 +1782,8 @@ fn test_update_funding_target_fails_when_settled() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &5_000i128); // status ├ö├Ñ├å 1 (funded)
     client.settle(); // status ├ö├Ñ├å 2 (settled)
     client.update_funding_target(&6_000i128, &0u32);
@@ -1857,9 +1833,8 @@ fn test_update_funding_target_equal_to_funded_amount_succeeds() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &4_000i128); // funded_amount == 4_000, status still 0
 
     // new_target == funded_amount: boundary ├ö├ç├Â must not panic.
@@ -1934,9 +1909,8 @@ fn test_update_funding_target_promotion_emits_funding_state_changed() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     let investor = Address::generate(&env);
     sac.stellar.mint(&investor, &4_000i128);
     client.fund(&investor, &4_000i128);
@@ -1998,9 +1972,8 @@ fn test_update_funding_target_raise_does_not_emit_funding_state_changed() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     let investor = Address::generate(&env);
     sac.stellar.mint(&investor, &4_000i128);
     client.fund(&investor, &4_000i128);
@@ -2056,9 +2029,8 @@ fn test_update_funding_target_negative_panics() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.update_funding_target(&-1i128, &0u32);
 }
 // --- update_maturity: open-only, ledger time semantics, MaturityUpdatedEvent ---
@@ -2099,9 +2071,8 @@ fn test_update_maturity_event_fields() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     client.update_maturity(&2000u64, &0u32);
 
@@ -2149,9 +2120,8 @@ fn test_update_maturity_fails_when_funded() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &5_000i128); // status ├ö├Ñ├å 1 (funded)
     client.update_maturity(&2000u64, &0u32);
 }
@@ -2188,9 +2158,8 @@ fn test_update_maturity_fails_when_settled() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &5_000i128); // status ├ö├Ñ├å 1
     client.settle(); // status ├ö├Ñ├å 2
     client.update_maturity(&2000u64, &0u32);
@@ -2238,9 +2207,8 @@ fn test_update_maturity_to_zero_succeeds() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     let updated = client.update_maturity(&0u64, &0u32);
     assert_eq!(updated.maturity, 0u64);
     assert_eq!(updated.status, 0);
@@ -2278,9 +2246,8 @@ fn test_settle_passes_exactly_at_maturity_ledger_time() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &5_000i128);
 
     // Advance ledger to exactly maturity — must succeed
@@ -2321,9 +2288,8 @@ fn test_settle_fails_one_second_before_maturity() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &5_000i128);
 
     // One second before maturity — must reject
@@ -2361,9 +2327,8 @@ fn test_update_maturity_twice_overwrites() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     client.update_maturity(&2000u64, &0u32);
     let updated = client.update_maturity(&3000u64, &1u32);
@@ -2433,9 +2398,8 @@ fn test_update_maturity_rejects_at_or_before_funding_deadline() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Attempting update_maturity to 900 (< 1000) must fail with FundingDeadlineAtOrAfterMaturity
     assert_contract_error(
@@ -2480,9 +2444,8 @@ fn test_update_maturity_nonce_replay_protection() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     assert_eq!(client.get_admin_nonce(), 0u32);
 
@@ -2948,9 +2911,8 @@ fn auth_audit_sweep_terminal_dust_requires_treasury() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &TARGET);
     client.settle();
     token.stellar.mint(&escrow_id, &100i128);
@@ -3225,6 +3187,7 @@ fn test_rotate_beneficiary_success_dual_auth() {
     assert_eq!(updated.sme_address, new_sme);
     assert_eq!(client.get_escrow().sme_address, new_sme);
 
+    let rotate_events = env.events().all();
     let all_evts = rotate_events.events();
     let total_evts = all_evts.len();
     assert!(total_evts >= 2);
@@ -3416,9 +3379,8 @@ fn test_rotate_beneficiary_then_withdraw_goes_to_new_sme() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     token.stellar.mint(&investor, &TARGET);
     token
         .stellar
@@ -3459,9 +3421,8 @@ fn test_rotate_beneficiary_partial_funding_panics() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.fund(&investor, &TARGET); // partial funding
     client.rotate_beneficiary(&new_sme);
 }
@@ -3639,9 +3600,8 @@ fn test_rebind_registry_ref_sets_and_clears() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let invoice_id = client.get_escrow().invoice_id.clone();
 
@@ -3723,9 +3683,8 @@ fn test_rebind_registry_ref_requires_admin_auth() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     env.mock_auths(&[]);
     client.rebind_registry_ref(&Some(Address::generate(&env)), &0u32);
@@ -3771,9 +3730,8 @@ fn test_registry_ref_does_not_affect_settlement_or_funding() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Confirm no registry at init.
     assert_eq!(client.get_registry_ref(), None);
@@ -3971,9 +3929,8 @@ fn test_update_maturity_max_horizon_unauthorized() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     env.mock_auths(&[]);
     client.update_maturity_max_horizon(&3_600u64);
 }
@@ -4005,9 +3962,8 @@ fn test_update_maturity_max_horizon_emits_event() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let new_horizon = 3_600u64;
     client.update_maturity_max_horizon(&new_horizon);
@@ -4066,9 +4022,8 @@ fn test_lowered_horizon_existing_maturity_untouched_and_far_update_rejected() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     assert_eq!(client.get_escrow().maturity, 2_000u64);
 
@@ -4125,9 +4080,8 @@ fn test_lowered_horizon_allows_within_horizon_maturity_update() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Lower the horizon to 2 hours.
     client.update_maturity_max_horizon(&7_200u64);
@@ -4157,7 +4111,7 @@ fn test_post_handover_admin_can_clear_hold_set_by_old_admin() {
     default_init(&client, &env, &old_admin, &sme);
 
     // 1. Old admin sets a legal hold
-    client.set_legal_hold(&true);
+    client.set_legal_hold(&true, &0u32);
     assert!(client.get_legal_hold());
 
     // 2. Old admin proposes new admin
@@ -4214,7 +4168,7 @@ fn test_partial_settle_legal_hold_typed_error() {
     let (client, admin, sme) = setup(&env);
     default_init(&client, &env, &admin, &sme);
 
-    client.set_legal_hold(&true);
+    client.set_legal_hold(&true, &0u32);
 
     assert_contract_error(
         client.try_partial_settle(&sme),
@@ -4282,9 +4236,8 @@ fn test_raise_maturity_max_horizon_succeeds() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let default_horizon = DEFAULT_MATURITY_MAX_HORIZON_SECS;
     assert_eq!(client.get_maturity_max_horizon(), default_horizon);
@@ -4318,9 +4271,8 @@ fn test_raise_maturity_max_horizon_not_raised_panics() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let default_horizon = DEFAULT_MATURITY_MAX_HORIZON_SECS;
     assert_contract_error(
@@ -4354,9 +4306,8 @@ fn test_raise_maturity_max_horizon_emits_event() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let old_horizon = DEFAULT_MATURITY_MAX_HORIZON_SECS;
     let new_horizon = old_horizon + 7_200;
