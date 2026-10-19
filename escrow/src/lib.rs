@@ -5134,7 +5134,10 @@ impl StarfundEscrow {
     }
 
     fn settleable_now(env: &Env) -> bool {
-        if Self::legal_hold_active(env) {
+        if Self::paused_blocks(env, PauseEntry::Settlement)
+            || Self::legal_hold_active(env)
+            || Self::is_dispute_active(env.clone())
+        {
             return false;
         }
         let escrow = Self::get_escrow(env.clone());
@@ -5152,7 +5155,7 @@ impl StarfundEscrow {
     /// Settlement requires:
     /// - escrow funded
     /// - maturity reached
-    /// - no active legal hold
+    /// - settlement is not blocked by an operational pause, legal hold, or active dispute
     pub fn is_settleable(env: Env) -> bool {
         Self::settleable_now(&env)
     }
@@ -5163,14 +5166,13 @@ impl StarfundEscrow {
     /// Integrators otherwise have to call [`StarfundEscrow::is_settleable`],
     /// [`StarfundEscrow::get_legal_hold`], [`StarfundEscrow::has_maturity_lock`], and read the
     /// maturity timestamp separately, then replicate the contract's precedence rules ΓÇö which drifts
-    /// out of sync and produces confusing UIs ("settleable" but blocked by a legal hold).
+    /// out of sync and produces confusing UIs ("settleable" but blocked by a settlement gate).
     ///
     /// # Precedence
     /// `ready_now` and `is_settleable` are computed from the **same** single-source-of-truth gate
-    /// (`Self::settleable_now`) that [`StarfundEscrow::settle`] and
-    /// [`StarfundEscrow::partial_settle`] apply: a legal hold blocks first, then funded status,
-    /// then maturity. A `ready_now == true` value therefore reliably predicts a successful `settle`
-    /// on the current ledger.
+    /// (`Self::settleable_now`) that [`StarfundEscrow::settle`] applies: operational pause, legal
+    /// hold, active dispute, funded status, and maturity are checked. A `ready_now == true` value
+    /// therefore reliably predicts that the view's settlement gates are clear on the current ledger.
     ///
     /// # Read-only
     /// Pure view: no `require_auth`, no storage writes, and no TTL bump.

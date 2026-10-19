@@ -2182,6 +2182,38 @@ fn test_is_settleable_legal_hold_active() {
 }
 
 #[test]
+fn test_is_settleable_settlement_pause_active() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+    fund_to_target(&client, &env);
+    client.set_paused(
+        &true,
+        &crate::PauseScope::Settlement,
+        &crate::PauseReason::Incident,
+    );
+
+    assert!(
+        !client.is_settleable(),
+        "settlement pause makes the escrow not settleable"
+    );
+}
+
+#[test]
+fn test_is_settleable_active_dispute() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+    fund_to_target(&client, &env);
+    client.open_dispute(&admin);
+
+    assert!(
+        !client.is_settleable(),
+        "active dispute makes the escrow not settleable"
+    );
+}
+
+#[test]
 fn test_is_settleable_already_settled() {
     let env = Env::default();
     let (client, admin, sme) = setup(&env);
