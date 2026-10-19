@@ -1274,6 +1274,17 @@ pub(crate) fn is_terminal_status(status: u32) -> bool {
     matches!(status, 2..=4)
 }
 
+fn classify_escrow_status(status: u32) -> EscrowStatus {
+    match status {
+        0 => EscrowStatus::Open,
+        1 => EscrowStatus::Funded,
+        2 => EscrowStatus::Settled,
+        3 => EscrowStatus::Withdrawn,
+        4 => EscrowStatus::Cancelled,
+        other => EscrowStatus::Unknown(other),
+    }
+}
+
 /// Predicate: `true` when `status` is one of the **pre-settlement** escrow states
 /// (`0` = open, `1` = funded).
 ///
@@ -1835,6 +1846,22 @@ pub struct DisputeRecord {
     pub resolved_by: Option<Address>,
 }
 
+/// Human-readable classification of the numeric escrow lifecycle status.
+///
+/// The `Unknown` variant carries the unrecognized code so newer or migrated states remain
+/// observable instead of causing strict conversion failures.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EscrowStatus {
+    Open,
+    Funded,
+    Settled,
+    Withdrawn,
+    Cancelled,
+    /// Preserves the original discriminant so callers can identify future or migrated states.
+    Unknown(u32),
+}
+
 /// Comprehensive summary of the escrow contract state.
 /// Bundles multiple read-only values to allow a single host invocation
 /// for off-chain indexers and client rendering.
@@ -1843,6 +1870,8 @@ pub struct DisputeRecord {
 pub struct EscrowSummary {
     /// Full escrow snapshot.
     pub escrow: InvoiceEscrow,
+    /// Human-readable lifecycle classification; unknown status codes preserve their value.
+    pub status_classification: EscrowStatus,
     /// True when `escrow.maturity > 0`; false means settlement has no maturity time lock.
     pub has_maturity_lock: bool,
     /// Active legal or compliance hold flag.
@@ -4385,6 +4414,7 @@ impl StarfundEscrow {
     /// in a single host invocation.
     pub fn get_escrow_summary(env: Env) -> EscrowSummary {
         let escrow = Self::get_escrow(env.clone());
+        let status_classification = classify_escrow_status(escrow.status);
         let legal_hold = Self::get_legal_hold(env.clone());
         let funding_close_snapshot_opt = Self::get_funding_close_snapshot(env.clone());
         let unique_funder_count = Self::get_unique_funder_count(env.clone());
@@ -4406,6 +4436,7 @@ impl StarfundEscrow {
 
         EscrowSummary {
             escrow,
+            status_classification,
             has_maturity_lock: Self::has_maturity_lock(env.clone()),
             legal_hold,
             funding_close_snapshot,
@@ -9794,6 +9825,7 @@ mod init_reentry_guard_tests {
     #[test]
     fn first_initialization_is_allowed() {
         let env = Env::default();
+        env.mock_all_auths();
         with_contract(&env, || ensure_not_initialized(&env));
     }
 

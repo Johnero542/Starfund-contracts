@@ -5,7 +5,7 @@ use super::{
 use crate::{
     AttestationDigestAppended, CollateralClearedEvt, CollateralCommitmentSnapshot,
     CollateralRecordedEvt, DataKey, EscrowCloseSnapshot, EscrowError, FundingCancelled,
-    InvestorRefundedEvt, StarfundEscrow, StarfundEscrowClient, PauseReason, PauseScope,
+    InvestorRefundedEvt, StarfundEscrow, StarfundEscrowClient, EscrowStatus, PauseReason, PauseScope,
     PrimaryAttestationBound, RegistryRefRebound, TreasuryDustSwept, YieldTier,
     DEFAULT_MATURITY_MAX_HORIZON_SECS, MAX_ATTESTATION_APPEND_ENTRIES, SCHEMA_VERSION,
 };
@@ -2817,6 +2817,7 @@ fn test_get_escrow_summary_happy_path() {
 
     // Verify fields match individual getters
     assert_eq!(summary.escrow, client.get_escrow());
+    assert_eq!(summary.status_classification, EscrowStatus::Open);
     assert_eq!(summary.has_maturity_lock, client.has_maturity_lock());
     assert_eq!(summary.legal_hold, client.get_legal_hold());
 
@@ -2863,6 +2864,26 @@ fn test_get_escrow_summary_happy_path() {
     assert_eq!(summary.protocol_fee_bps, client.get_protocol_fee_bps());
     assert!(!summary.paused);
     assert_eq!(summary.protocol_fee_bps, 0);
+}
+
+#[test]
+fn test_get_escrow_summary_preserves_unknown_status_code() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    env.as_contract(&client.address, || {
+        let mut escrow = StarfundEscrow::get_escrow(env.clone());
+        escrow.status = 42;
+        env.storage().instance().set(&DataKey::Escrow, &escrow);
+    });
+
+    let summary = client.get_escrow_summary();
+    assert_eq!(summary.escrow.status, 42);
+    assert_eq!(
+        summary.status_classification,
+        EscrowStatus::Unknown(42)
+    );
 }
 
 #[test]

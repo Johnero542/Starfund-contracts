@@ -122,6 +122,8 @@ Bundles multiple read-only values in a single host invocation, optimizing read l
 
 **Return value:** `EscrowSummary` struct containing:
 - `escrow: InvoiceEscrow` — Full escrow snapshot.
+- `status_classification: EscrowStatus` — Human-readable lifecycle state; unknown numeric
+  status codes are returned as `Unknown(code)` so migrations remain observable.
 - `has_maturity_lock: bool` — True when `escrow.maturity > 0`.
 - `legal_hold: bool` — True if compliance hold is active.
 - `funding_close_snapshot: EscrowCloseSnapshot` — Custom option-like enum (`None` or `Some(FundingCloseSnapshot)`).
