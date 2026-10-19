@@ -831,6 +831,9 @@ pub enum EscrowError {
     InvestorCommitmentLockNotExpired = 128,
     /// Checked arithmetic overflow in [`StarfundEscrow::compute_investor_payout`].
     ComputePayoutArithmeticOverflow = 129,
+    /// [`StarfundEscrow::fund`] received an amount not exactly representable at the configured
+    /// funding token decimal scale.
+    FundingTokenScaleInvalid = 130,
 
     /// [`StarfundEscrow::cancel_funding`] blocked while a legal hold is active.
     LegalHoldBlocksCancelFunding = 140,
@@ -1077,6 +1080,9 @@ pub enum EscrowError {
     /// division edge case into [`StarfundEscrow::withdraw`] and
     /// [`StarfundEscrow::compute_investor_payout`]. Reject at the transition instead.
     PartialSettleNoFunds = 209,
+    /// [`StarfundEscrow::init`] configured token decimals that differ from the funding token's
+    /// SEP-41 `decimals()` value.
+    FundingTokenDecimalsMismatch = 268,
 }
 
 #[inline(always)]
@@ -3432,7 +3438,8 @@ impl StarfundEscrow {
     ///
     /// # Errors
     /// Emits typed [`EscrowError`] codes for invalid amounts, yield bounds, invoice id validation,
-    /// duplicate initialization, malformed optional caps, and invalid tier configuration.
+    /// duplicate initialization, malformed optional caps, invalid tier configuration, and a
+    /// configured token-decimal scale that differs from the funding token's declared decimals.
     pub fn init(
         env: Env,
         admin: Address,
@@ -3518,6 +3525,13 @@ impl StarfundEscrow {
         }
 
         let invoice_sym = validate_invoice_id_string(&env, &invoice_id);
+        if let Some(decimals) = token_decimals {
+            ensure(
+                &env,
+                TokenClient::new(&env, &funding_token).decimals() == decimals,
+                EscrowError::FundingTokenDecimalsMismatch,
+            );
+        }
 
         env.storage()
             .instance()

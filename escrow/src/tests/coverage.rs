@@ -239,6 +239,7 @@ fn escrow_error_discriminants_are_unique() {
         EscrowError::InvestorClaimNotSettled,
         EscrowError::InvestorCommitmentLockNotExpired,
         EscrowError::ComputePayoutArithmeticOverflow,
+        EscrowError::FundingTokenScaleInvalid,
         EscrowError::LegalHoldBlocksCancelFunding,
         EscrowError::CancelFundingNotOpen,
         EscrowError::RefundNotCancelled,
@@ -312,6 +313,7 @@ fn escrow_error_discriminants_are_unique() {
         EscrowError::BeneficiaryImmutableAfterFunding,
         EscrowError::AdminRecoveryNotExpired,
         EscrowError::UniqueInvestorHardCapReached,
+        EscrowError::FundingTokenDecimalsMismatch,
     ];
     let mut codes = std::collections::BTreeSet::new();
     for error in errors {
@@ -398,6 +400,7 @@ fn escrow_error_discriminants_match_canonical_table() {
         (EscrowError::InvestorClaimNotSettled, 127),
         (EscrowError::InvestorCommitmentLockNotExpired, 128),
         (EscrowError::ComputePayoutArithmeticOverflow, 129),
+        (EscrowError::FundingTokenScaleInvalid, 130),
         (EscrowError::LegalHoldBlocksCancelFunding, 140),
         (EscrowError::CancelFundingNotOpen, 141),
         (EscrowError::RefundNotCancelled, 142),
@@ -414,8 +417,9 @@ fn escrow_error_discriminants_match_canonical_table() {
         (EscrowError::FloorLowerNotOpen, 269),
         (EscrowError::NewFloorNotLower, 262),
         (EscrowError::NewFloorNotPositive, 261),
+        (EscrowError::FundingTokenDecimalsMismatch, 268),
     ];
-    assert_eq!(TABLE.len(), 90);
+    assert_eq!(TABLE.len(), 92);
     for (variant, code) in TABLE {
         assert_eq!(*variant as u32, *code, "discriminant drift for code {code}");
     }
