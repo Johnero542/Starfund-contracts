@@ -746,6 +746,11 @@ pub enum EscrowError {
     CollateralBatchEmpty = 64,
     /// [`StarfundEscrow::batch_record_collateral`] exceeded [`MAX_COLLATERAL_BATCH`].
     CollateralBatchTooLarge = 65,
+    /// [`StarfundEscrow::record_sme_collateral_commitment`] or
+    /// [`StarfundEscrow::batch_record_collateral`] called while the escrow is not open.
+    CollateralNotOpen = 66,
+    /// Collateral recording was attempted while an operational pause was active.
+    PausedBlocksCollateral = 67,
 
     /// [`StarfundEscrow::set_investors_allowlisted`] received an empty batch.
     InvestorBatchEmpty = 70,
@@ -4935,6 +4940,31 @@ impl StarfundEscrow {
         env.storage().instance().get(&keys::collateral_pledge_key())
     }
 
+    /// Retrieve the commitments recorded by the most recent collateral write.
+    ///
+    /// A batch call returns every item in that batch; a single-record call returns
+    /// a one-item vector. Existing instances without batch storage fall back to the
+    /// currently stored single commitment.
+    pub fn get_sme_collateral_commitments(env: Env) -> Vec<SmeCollateralCommitment> {
+        if let Some(commitments) = env
+            .storage()
+            .instance()
+            .get(&keys::collateral_pledge_batch_key())
+        {
+            return commitments;
+        }
+
+        let mut commitments = Vec::new(&env);
+        if let Some(commitment) = env
+            .storage()
+            .instance()
+            .get(&keys::collateral_pledge_key())
+        {
+            commitments.push_back(commitment);
+        }
+        commitments
+    }
+
     /// Retire the recorded SME collateral pledge.
     ///
     /// Metadata-only: no tokens are moved. Requires SME auth.
@@ -4955,6 +4985,9 @@ impl StarfundEscrow {
         env.storage()
             .instance()
             .remove(&keys::collateral_pledge_key());
+        env.storage()
+            .instance()
+            .remove(&keys::collateral_pledge_batch_key());
 
         CollateralClearedEvt {
             name: symbol_short!("coll_clr"),
@@ -5509,6 +5542,8 @@ impl StarfundEscrow {
     /// - [`EscrowError::CollateralAmountNotPositive`] if `amount <= 0`.
     /// - [`EscrowError::CollateralAssetEmpty`] if `asset` is empty.
     /// - [`EscrowError::CollateralTimestampBackwards`] if the replacement timestamp is in the past.
+    /// - [`EscrowError::PausedBlocksCollateral`] if an operational pause is active.
+    /// - [`EscrowError::CollateralNotOpen`] if the escrow is not open.
     /// - Standard uninitialized check via `load_escrow_require_sme`.
     pub fn record_sme_collateral_commitment(
         env: Env,
@@ -5522,8 +5557,15 @@ impl StarfundEscrow {
             EscrowError::CollateralAssetEmpty,
         );
 
+        guard_not_paused(
+            &env,
+            EscrowError::PausedBlocksCollateral,
+            PauseEntry::Admin,
+        );
+
         // env.clone(): env is used again after this call for storage read/write, timestamp, and publish.
         let escrow = Self::load_escrow_require_sme(&env);
+        ensure(&env, escrow.status == 0, EscrowError::CollateralNotOpen);
 
         let now = env.ledger().timestamp();
         let prior: Option<SmeCollateralCommitment> =
@@ -5546,6 +5588,9 @@ impl StarfundEscrow {
         env.storage()
             .instance()
             .set(&keys::collateral_pledge_key(), &commitment);
+        env.storage()
+            .instance()
+            .remove(&keys::collateral_pledge_batch_key());
 
         CollateralRecordedEvt {
             name: symbol_short!("coll_rec"),
@@ -5569,13 +5614,14 @@ impl StarfundEscrow {
     /// - `asset` is non-empty ([`EscrowError::CollateralAssetEmpty`])
     /// - Replacement timestamp not backwards ([`EscrowError::CollateralTimestampBackwards`])
     ///
-    /// The stored [`SmeCollateralCommitment`] after a successful batch is the **last** item in
-    /// the vector. A [`CollateralRecordedEvt`] is emitted for **each** item, preserving the
-    /// per-item audit trail.
+    /// All items are available through [`StarfundEscrow::get_sme_collateral_commitments`];
+    /// [`StarfundEscrow::get_sme_collateral_commitment`] continues to return the last item.
+    /// A [`CollateralRecordedEvt`] is emitted for **each** item, preserving the per-item audit trail.
     ///
     /// # Batch bounds
     /// - `items` must be non-empty ([`EscrowError::CollateralBatchEmpty`]).
     /// - `items.len()` must not exceed [`MAX_COLLATERAL_BATCH`] ([`EscrowError::CollateralBatchTooLarge`]).
+    /// - The escrow must be open and not paused.
     ///
     /// # Authorization
     /// Requires [`InvoiceEscrow::sme_address`] auth (same as the single entrypoint).
@@ -5605,7 +5651,14 @@ impl StarfundEscrow {
             );
         }
 
+        guard_not_paused(
+            &env,
+            EscrowError::PausedBlocksCollateral,
+            PauseEntry::Admin,
+        );
+
         let escrow = Self::load_escrow_require_sme(&env);
+        ensure(&env, escrow.status == 0, EscrowError::CollateralNotOpen);
         let now = env.ledger().timestamp();
 
         // Check timestamp against the existing stored commitment (if any).
@@ -5626,6 +5679,7 @@ impl StarfundEscrow {
             amount: 0,
             recorded_at: now,
         };
+        let mut commitments = Vec::new(&env);
 
         for i in 0..n {
             let (asset, amount) = items.get(i).unwrap();
@@ -5641,10 +5695,7 @@ impl StarfundEscrow {
                 amount,
                 recorded_at: now,
             };
-
-            env.storage()
-                .instance()
-                .set(&keys::collateral_pledge_key(), &last_commitment);
+            commitments.push_back(last_commitment.clone());
 
             CollateralRecordedEvt {
                 name: symbol_short!("coll_rec"),
@@ -5654,6 +5705,13 @@ impl StarfundEscrow {
             }
             .publish(&env);
         }
+
+        env.storage()
+            .instance()
+            .set(&keys::collateral_pledge_key(), &last_commitment);
+        env.storage()
+            .instance()
+            .set(&keys::collateral_pledge_batch_key(), &commitments);
 
         last_commitment
     }

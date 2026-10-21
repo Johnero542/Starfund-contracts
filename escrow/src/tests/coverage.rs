@@ -278,6 +278,8 @@ fn escrow_error_discriminants_are_unique() {
         EscrowError::PausedBlocksSettlement,
         EscrowError::PausedBlocksWithdrawal,
         EscrowError::PausedBlocksInvestorClaims,
+        EscrowError::CollateralNotOpen,
+        EscrowError::PausedBlocksCollateral,
         EscrowError::ProtocolFeeBpsOutOfRange,
         EscrowError::WithdrawFeeArithmeticOverflow,
         EscrowError::WithdrawNetArithmeticUnderflow,
