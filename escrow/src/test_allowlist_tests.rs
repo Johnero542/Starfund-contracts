@@ -584,7 +584,7 @@ fn gate_fund_allowlist_active_investor_denied_returns_typed_error() {
     init_gate(&env, &client);
 
     let investor = Address::generate(&env);
-    client.set_allowlist_active(&true, &0u32);
+    client.set_allowlist_active(&true);
     client.set_investor_allowlisted(&investor, &false, &0u32);
 
     assert_contract_error_gate(
@@ -619,7 +619,7 @@ fn gate_fwc_allowlist_active_investor_allowed_succeeds() {
     init_gate(&env, &client);
 
     let investor = Address::generate(&env);
-    client.set_allowlist_active(&true, &0u32);
+    client.set_allowlist_active(&true);
     client.set_investor_allowlisted(&investor, &true, &0u32);
 
     let escrow = client.fund_with_commitment(&investor, &4_000i128, &0u64);
@@ -654,7 +654,7 @@ fn gate_fwc_allowlist_active_investor_denied_returns_typed_error() {
     init_gate(&env, &client);
 
     let investor = Address::generate(&env);
-    client.set_allowlist_active(&true, &0u32);
+    client.set_allowlist_active(&true);
     client.set_investor_allowlisted(&investor, &false, &0u32);
 
     assert_contract_error_gate(
@@ -754,7 +754,7 @@ fn gate_revoke_mid_funding_blocks_next_deposit_fund() {
     let investor = Address::generate(&env);
 
     // Step 1: allowlist active, investor allowed — first deposit succeeds.
-    client.set_allowlist_active(&true, &0u32);
+    client.set_allowlist_active(&true);
     client.set_investor_allowlisted(&investor, &true, &0u32);
     let after_first = client.fund(&investor, &3_000i128);
     assert_eq!(after_first.funded_amount, 3_000i128);
@@ -788,7 +788,7 @@ fn gate_revoke_before_first_fwc_deposit_blocks_it() {
     let investor = Address::generate(&env);
 
     // Allowlist investor, then revoke before they deposit.
-    client.set_allowlist_active(&true, &0u32);
+    client.set_allowlist_active(&true);
     client.set_investor_allowlisted(&investor, &true, &0u32);
     client.set_investor_allowlisted(&investor, &false, &0u32);
 
@@ -1568,7 +1568,7 @@ fn allowlist_lowering_limit_does_not_evict_but_blocks_new_additions() {
     let investor = Address::generate(&env);
     let removed = Address::generate(&env);
 
-    client.set_allowlist_active(&true, &0u32);
+    client.set_allowlist_active(&true);
     client.set_investor_allowlisted(&investor, &true, &0u32);
     client.set_investor_allowlisted(&removed, &true, &0u32);
     client.set_investor_allowlisted(&removed, &false, &0u32);
@@ -1976,8 +1976,7 @@ fn pagination_full_scan_no_overflow_or_duplicates() {
     let mut inserted: Vec<String> = Vec::new();
     for _ in 0..n {
         let addr = Address::generate(&env);
-        let addr_str = addr.to_string().to_string();
-        inserted.push(addr_str.clone());
+        inserted.insert(addr.to_string());
         client.set_investor_allowlisted(&addr, &true, &0u32);
     }
 

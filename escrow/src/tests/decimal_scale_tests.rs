@@ -10,7 +10,7 @@
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Env};
 
-use super::{deploy, install_stellar_asset_token};
+use super::{assert_contract_error, deploy, install_stellar_asset_token};
 use crate::{EscrowError, StarfundEscrow, MAX_INVOICE_AMOUNT};
 
 // ---------------------------------------------------------------------------
@@ -60,6 +60,40 @@ fn deploy_with_scale<'a>(
 
     let investor = Address::generate(env);
     (client, investor, sat.stellar)
+}
+
+#[test]
+fn decimal_scale_init_rejects_values_above_eighteen() {
+    for decimals in [19, u32::MAX] {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = deploy(&env);
+
+        assert_contract_error(
+            client.try_init(
+                &Address::generate(&env),
+                &soroban_sdk::String::from_str(&env, "INV-DS-INVALID"),
+                &Address::generate(&env),
+                &1_000i128,
+                &800i64,
+                &0u64,
+                &Address::generate(&env),
+                &None,
+                &Address::generate(&env),
+                &None,
+                &None,
+                &None,
+                &None,
+                &None,
+                &None,
+                &None,
+                &None,
+                &None::<i64>,
+                &Some(decimals),
+            ),
+            EscrowError::FundingTokenDecimalsOutOfRange,
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

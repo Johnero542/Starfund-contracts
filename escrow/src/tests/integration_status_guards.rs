@@ -142,8 +142,18 @@ fn test_lower_max_unique_investors_rejects_when_cancelled() {
         &None,
         &None);
     cancel(&client, &admin);
-    let result = client.try_lower_max_unique_investors(&5u32);
+    let result = client.try_lower_max_unique_investors(&5u32, &client.get_admin_nonce());
     assert_contract_error(result, EscrowError::CapLowerNotOpen);
+}
+
+/// `raise_max_per_investor` rejects when cancelled with the generic open-funding error.
+#[test]
+fn test_raise_max_per_investor_rejects_when_cancelled() {
+    let env = make_env();
+    let (client, admin, _sme, _tok, _tre) = setup_open(&env);
+    cancel(&client, &admin);
+    let result = client.try_raise_max_per_investor(&500i128);
+    assert_contract_error(result, EscrowError::EscrowNotOpenForFunding);
 }
 
 /// `lower_min_contribution_floor` rejects when cancelled with `FloorLowerNotOpen`.
@@ -177,7 +187,7 @@ fn test_lower_min_contribution_floor_rejects_when_cancelled() {
         &None,
         &None);
     cancel(&client, &admin);
-    let result = client.try_lower_min_contribution_floor(&50i128);
+    let result = client.try_lower_min_contribution_floor(&50i128, &client.get_admin_nonce());
     assert_contract_error(result, EscrowError::FloorLowerNotOpen);
 }
 
@@ -248,5 +258,5 @@ fn test_lower_max_unique_investors_succeeds_when_open() {
         &None,
         &None);
     // Lowering from 10 to 5 should succeed while open.
-    client.lower_max_unique_investors(&5u32);
+    client.lower_max_unique_investors(&5u32, &client.get_admin_nonce());
 }
