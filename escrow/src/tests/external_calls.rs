@@ -936,6 +936,51 @@ fn sweep_terminal_dust_keeps_cancelled_status_and_preserves_refund_path() {
 }
 
 #[test]
+fn sweep_terminal_dust_preserves_undistributed_withdrawn_principal() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, escrow_id, sme) =
+        init_and_fund_with_real_token(&env, TARGET, "SWEEP_WITHDRAWN_FLOOR");
+    let token = TokenClient::new(&env, &client.get_funding_token());
+    let tranche = TARGET / 2;
+
+    token.transfer(&escrow_id, &MuxedAddress::from(sme), &tranche);
+    env.as_contract(&escrow_id, || {
+        let mut escrow = StarfundEscrow::get_escrow(env.clone());
+        escrow.status = 3;
+        env.storage().instance().set(&DataKey::Escrow, &escrow);
+        env.storage()
+            .instance()
+            .set(&DataKey::ReleasedAmount, &tranche);
+        env.storage()
+            .instance()
+            .set(&DataKey::DistributedPrincipal, &tranche);
+    });
+
+    assert_contract_error(
+        client.try_sweep_terminal_dust(&1i128),
+        EscrowError::SweepExceedsLiabilityFloor,
+    );
+}
+
+#[test]
+fn sweep_terminal_dust_after_partial_release_and_withdraw() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, escrow_id, _) =
+        init_and_fund_with_real_token(&env, TARGET, "SWEEP_RELEASE_WITHDRAW");
+    let tranche = TARGET / 2;
+
+    client.release(&tranche);
+    client.withdraw();
+    assert_eq!(client.get_distributed_principal(), TARGET);
+
+    let token = StellarAssetClient::new(&env, &client.get_funding_token());
+    token.mint(&escrow_id, &1i128);
+    assert_eq!(client.sweep_terminal_dust(&1i128), 1i128);
+}
+
+#[test]
 #[ignore = "branch-specific latent failure"]
 fn sweep_liability_floor_blocked_emits_no_dust_event() {
     use soroban_sdk::testutils::Events as _;

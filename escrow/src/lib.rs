@@ -356,6 +356,9 @@ impl StarfundEscrow {
 /// Default maximum maturity horizon in seconds (~5 years) when no explicit horizon is configured.
 pub const DEFAULT_MATURITY_MAX_HORIZON_SECS: u64 = 157_680_000; // ~5 years (365.25 * 24 * 3600 * 5)
 
+/// Minimum interval between a funding deadline and a non-zero maturity timestamp (30 days).
+pub const MIN_MATURITY_AFTER_FUNDING_DEADLINE_SECS: u64 = 2_592_000;
+
 // ---------------------------------------------------------------------------
 // Bounded fee schedule
 // ---------------------------------------------------------------------------
@@ -1031,6 +1034,8 @@ pub enum EscrowError {
     WithdrawNetArithmeticUnderflow = 217,
     /// [`StarfundEscrow::init`] rejected a `funding_deadline` at or after maturity.
     FundingDeadlineAtOrAfterMaturity = 218,
+    /// [`StarfundEscrow::update_maturity`] set maturity less than 30 days after the funding deadline.
+    MaturityTooCloseToFundingDeadline = 273,
 
     /// [`StarfundEscrow::settle_batch`] received an empty escrow addresses vector.
     SettlementBatchEmpty = 223,
@@ -1397,6 +1402,17 @@ pub(crate) fn is_terminal_status(status: u32) -> bool {
     matches!(status, 2..=4)
 }
 
+fn classify_escrow_status(status: u32) -> EscrowStatus {
+    match status {
+        0 => EscrowStatus::Open,
+        1 => EscrowStatus::Funded,
+        2 => EscrowStatus::Settled,
+        3 => EscrowStatus::Withdrawn,
+        4 => EscrowStatus::Cancelled,
+        other => EscrowStatus::Unknown(other),
+    }
+}
+
 /// Predicate: `true` when `status` is one of the **pre-settlement** escrow states
 /// (`0` = open, `1` = funded).
 ///
@@ -1578,8 +1594,9 @@ pub enum DataKey {
     /// Set to `true` once an investor's principal has been refunded in a cancelled escrow.
     /// Absent ΓçÆ `false`. Written once; prevents double-refund.
     InvestorRefunded(Address),
-    /// Running total of principal already returned to investors via [`StarfundEscrow::refund`].
-    /// Absent ΓçÆ `0`. Incremented atomically with each successful refund transfer.
+    /// Running total of principal already distributed via [`StarfundEscrow::release`],
+    /// [`StarfundEscrow::withdraw`], or [`StarfundEscrow::refund`].
+    /// Absent ΓçÆ `0`. Incremented atomically with each successful transfer.
     /// Used by [`StarfundEscrow::sweep_terminal_dust`] to compute outstanding liabilities:
     /// `outstanding = funded_amount - distributed_principal`.
     DistributedPrincipal,
@@ -1951,6 +1968,22 @@ pub struct DisputeRecord {
     pub resolved_by: Option<Address>,
 }
 
+/// Human-readable classification of the numeric escrow lifecycle status.
+///
+/// The `Unknown` variant carries the unrecognized code so newer or migrated states remain
+/// observable instead of causing strict conversion failures.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EscrowStatus {
+    Open,
+    Funded,
+    Settled,
+    Withdrawn,
+    Cancelled,
+    /// Preserves the original discriminant so callers can identify future or migrated states.
+    Unknown(u32),
+}
+
 /// Comprehensive summary of the escrow contract state.
 /// Bundles multiple read-only values to allow a single host invocation
 /// for off-chain indexers and client rendering.
@@ -1959,6 +1992,8 @@ pub struct DisputeRecord {
 pub struct EscrowSummary {
     /// Full escrow snapshot.
     pub escrow: InvoiceEscrow,
+    /// Human-readable lifecycle classification; unknown status codes preserve their value.
+    pub status_classification: EscrowStatus,
     /// True when `escrow.maturity > 0`; false means settlement has no maturity time lock.
     pub has_maturity_lock: bool,
     /// Active legal or compliance hold flag.
@@ -2319,16 +2354,6 @@ pub struct MinContributionFloorLowered {
 }
 
 #[contractevent]
-pub struct MinContributionFloorRaised {
-    #[topic]
-    pub name: Symbol,
-    #[topic]
-    pub invoice_id: Symbol,
-    pub old_floor: i128,
-    pub new_floor: i128,
-}
-
-#[contractevent]
 pub struct MaxPerInvestorCapRaised {
     #[topic]
     pub name: Symbol,
@@ -2526,7 +2551,8 @@ pub struct EscrowPartialSettle {
 ///   [`FundingCloseSnapshot::funding_target`]).
 /// - `ledger_timestamp`: [`Env::ledger`] timestamp at the moment of transition.
 /// - `trigger`: short routing symbol identifying which entrypoint caused the transition:
-///   `tgt_lower` for [`StarfundEscrow::update_funding_target`].
+///   `tgt_lower` for [`StarfundEscrow::update_funding_target`], or `part_set` for
+///   [`StarfundEscrow::partial_settle`].
 #[contractevent]
 pub struct FundingStateChanged {
     #[topic]
@@ -3973,9 +3999,9 @@ impl StarfundEscrow {
     /// be swept as dust.
     ///
     /// # Liability floor invariant
-    /// In **cancelled** (status 4) escrows, the sweep is rejected if it would reduce the
-    /// contract's token balance below the amount still owed to investors who have not yet
-    /// called [`StarfundEscrow::refund`]:
+    /// In **withdrawn** (status 3) and **cancelled** (status 4) escrows, the sweep is
+    /// rejected if it would reduce the contract's token balance below the amount not yet
+    /// distributed:
     ///
     /// ```text
     /// outstanding = funded_amount - distributed_principal
@@ -3983,11 +4009,12 @@ impl StarfundEscrow {
     /// ```
     ///
     /// `distributed_principal` ([`DataKey::DistributedPrincipal`]) is incremented atomically
-    /// by [`StarfundEscrow::refund`] each time an investor's principal is returned. This makes
-    /// the invariant computable on-chain without iterating over all investor addresses.
+    /// by [`StarfundEscrow::release`], [`StarfundEscrow::withdraw`], and
+    /// [`StarfundEscrow::refund`] as funds are distributed. This makes the invariant computable
+    /// on-chain without iterating over all investor addresses.
     ///
-    /// In **settled** (2) and **withdrawn** (3) states, disbursement is off-chain and this
-    /// floor does not apply.
+    /// In **settled** (2), payouts use the investor-claim path and this principal floor does
+    /// not apply.
     ///
     /// # Authorization
     /// The configured **treasury** account must authorize this call; the admin cannot sweep unless
@@ -4625,6 +4652,7 @@ impl StarfundEscrow {
     /// in a single host invocation.
     pub fn get_escrow_summary(env: Env) -> EscrowSummary {
         let escrow = Self::get_escrow(env.clone());
+        let status_classification = classify_escrow_status(escrow.status);
         let legal_hold = Self::get_legal_hold(env.clone());
         let funding_close_snapshot_opt = Self::get_funding_close_snapshot(env.clone());
         let unique_funder_count = Self::get_unique_funder_count(env.clone());
@@ -4646,6 +4674,7 @@ impl StarfundEscrow {
 
         EscrowSummary {
             escrow,
+            status_classification,
             has_maturity_lock: Self::has_maturity_lock(env.clone()),
             legal_hold,
             funding_close_snapshot,
@@ -7853,6 +7882,18 @@ impl StarfundEscrow {
             .instance()
             .set(&DataKey::PartialSettledAt, &now);
 
+        FundingStateChanged {
+            name: symbol_short!("fund_chg"),
+            invoice_id: escrow.invoice_id.clone(),
+            from_status: 0,
+            to_status: 1,
+            funded_amount: escrow.funded_amount,
+            funding_target: escrow.funding_target,
+            ledger_timestamp: env.ledger().timestamp(),
+            trigger: symbol_short!("part_set"),
+        }
+        .publish(&env);
+
         EscrowPartialSettle {
             name: symbol_short!("part_set"),
             invoice_id: escrow.invoice_id.clone(),
@@ -8135,19 +8176,19 @@ impl StarfundEscrow {
         // State transition and accounting (checks-effects-interactions). `DistributedPrincipal`
         // advances by the full gross `amount` (net + fee), keeping the liability accounting
         // consistent regardless of how principal is split.
+        let prev_distributed: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DistributedPrincipal)
+            .unwrap_or(0);
+        env.storage().instance().set(
+            &DataKey::DistributedPrincipal,
+            &prev_distributed.saturating_add(amount),
+        );
+
         if is_final {
             next_escrow.status = 3;
             env.storage().instance().set(&DataKey::Escrow, &next_escrow);
-
-            let prev_distributed: i128 = env
-                .storage()
-                .instance()
-                .get(&DataKey::DistributedPrincipal)
-                .unwrap_or(0);
-            env.storage().instance().set(
-                &DataKey::DistributedPrincipal,
-                &prev_distributed.saturating_add(amount),
-            );
 
             FinalRelease {
                 name: symbol_short!("fin_rel"),
@@ -8765,6 +8806,7 @@ impl StarfundEscrow {
     /// - [`EscrowError::MaturityInPast`] if `new_maturity` is in the past and non-zero.
     /// - [`EscrowError::MaturityExceedsMaxHorizon`] if `new_maturity` exceeds current max horizon.
     /// - [`EscrowError::FundingDeadlineAtOrAfterMaturity`] if a funding deadline is configured and `new_maturity <= deadline`.
+    /// - [`EscrowError::MaturityTooCloseToFundingDeadline`] if `new_maturity` is less than 30 days after the funding deadline.
     pub fn update_maturity(env: Env, new_maturity: u64, expected_nonce: u32) -> InvoiceEscrow {
         let mut escrow = Self::load_escrow_require_admin(&env);
         Self::consume_admin_nonce(&env, expected_nonce);
@@ -8793,6 +8835,12 @@ impl StarfundEscrow {
                 &env,
                 deadline < new_maturity,
                 EscrowError::FundingDeadlineAtOrAfterMaturity,
+            );
+            ensure(
+                &env,
+                new_maturity.saturating_sub(deadline)
+                    >= MIN_MATURITY_AFTER_FUNDING_DEADLINE_SECS,
+                EscrowError::MaturityTooCloseToFundingDeadline,
             );
         }
 
@@ -10076,10 +10124,11 @@ impl StarfundEscrow {
             .unwrap_or(false)
     }
 
-    /// Total principal already returned to investors via [`StarfundEscrow::refund`].
+    /// Total principal already distributed via [`StarfundEscrow::release`],
+    /// [`StarfundEscrow::withdraw`], or [`StarfundEscrow::refund`].
     ///
     /// Used by [`StarfundEscrow::sweep_terminal_dust`] to compute outstanding liabilities.
-    /// Absent ΓçÆ `0` (no refunds have occurred).
+    /// Absent ΓçÆ `0` (no principal has been distributed).
     pub fn get_distributed_principal(env: Env) -> i128 {
         env.storage()
             .instance()
@@ -10108,12 +10157,11 @@ impl StarfundEscrow {
     /// surplus               = token_balance - outstanding_liability
     /// ```
     ///
-    /// so a caller's view of "what may be swept" never disagrees with the on-chain
-    /// invariant. In settled (`2`) and withdrawn (`3`) states `distributed_principal`
-    /// stays `0` by design, so `outstanding_liability` reflects the full
-    /// `funded_amount`; the reported `surplus` is therefore never larger than what
-    /// `sweep_terminal_dust` would actually permit (it only applies the floor in the
-    /// cancelled state `4`). `surplus` is negative in a deficit.
+    /// In withdrawn (`3`) and cancelled (`4`) states, this is the same floor enforced by
+    /// `sweep_terminal_dust`. `release`, `withdraw`, and `refund` each increment
+    /// `distributed_principal` atomically with their transfers. In settled (`2`) state, the
+    /// result is informational; dust sweeping does not apply this principal floor.
+    /// `surplus` is negative in a deficit.
     ///
     /// This is a pure read: no authorization, no storage writes. All arithmetic is
     /// saturating, so the view cannot panic on extreme balances or amounts.
@@ -10380,6 +10428,7 @@ mod init_reentry_guard_tests {
     #[test]
     fn first_initialization_is_allowed() {
         let env = Env::default();
+        env.mock_all_auths();
         with_contract(&env, || ensure_not_initialized(&env));
     }
 

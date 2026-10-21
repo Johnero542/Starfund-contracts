@@ -2511,9 +2511,19 @@ fn test_update_maturity_rejects_at_or_before_funding_deadline() {
         EscrowError::FundingDeadlineAtOrAfterMaturity,
     );
 
-    // Attempting update_maturity to 1500 (> 1000) must succeed
-    let updated = client.update_maturity(&1500u64, &0u32);
-    assert_eq!(updated.maturity, 1500u64);
+    // A maturity less than 30 days after the deadline is rejected.
+    assert_contract_error(
+        client.try_update_maturity(
+            &(1000u64 + MIN_MATURITY_AFTER_FUNDING_DEADLINE_SECS - 1),
+            &0u32,
+        ),
+        EscrowError::MaturityTooCloseToFundingDeadline,
+    );
+
+    // Exactly 30 days after the deadline is accepted.
+    let valid_maturity = 1000u64 + MIN_MATURITY_AFTER_FUNDING_DEADLINE_SECS;
+    let updated = client.update_maturity(&valid_maturity, &0u32);
+    assert_eq!(updated.maturity, valid_maturity);
 }
 
 /// Issue #108: update_maturity consumes an admin nonce and rejects mismatches / replays.

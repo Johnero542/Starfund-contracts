@@ -1586,9 +1586,12 @@ fn test_partial_settle_sme_happy_path() {
     let investor = Address::generate(&env);
     client.fund(&investor, &(TARGET / 2));
 
+    let invoice_id = client.get_escrow().invoice_id;
+    let ledger_timestamp = env.ledger().timestamp();
     // SME settles early
     env.ledger().set_timestamp(1_234);
     client.partial_settle(&sme);
+    let events = env.events().all();
 
     let escrow = client.get_escrow();
     assert_eq!(
