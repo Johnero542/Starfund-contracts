@@ -59,6 +59,32 @@ fn release_before_dispute_succeeds() {
 }
 
 #[test]
+fn disputes_cannot_open_after_withdrawal_or_cancellation() {
+    let (_, withdrawn_client, withdrawn_admin, _) = funded_client();
+    withdrawn_client.withdraw();
+    assert_eq!(withdrawn_client.get_escrow().status, 3);
+    assert_contract_error(
+        withdrawn_client.try_open_dispute(&withdrawn_admin),
+        EscrowError::DisputeEscrowTerminated,
+    );
+    assert!(!withdrawn_client.is_dispute_active());
+    assert_eq!(withdrawn_client.get_dispute_record(), None);
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let (cancelled_client, admin, sme) = setup(&env);
+    default_init(&cancelled_client, &env, &admin, &sme);
+    cancelled_client.cancel_funding(&0u32);
+    assert_eq!(cancelled_client.get_escrow().status, 4);
+    assert_contract_error(
+        cancelled_client.try_open_dispute(&admin),
+        EscrowError::DisputeEscrowTerminated,
+    );
+    assert!(!cancelled_client.is_dispute_active());
+    assert_eq!(cancelled_client.get_dispute_record(), None);
+}
+
+#[test]
 fn release_before_funding_is_rejected() {
     // Status 0 (open) is not withdrawable: `withdraw()` requires status 1.
     let env = Env::default();
@@ -143,6 +169,55 @@ fn close_during_dispute_is_blocked() {
         }
         other => panic!("expected active dispute error, got {other:?}"),
     }
+}
+
+#[test]
+fn cancelled_escrow_cannot_close_until_refunds_clear_its_balance() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let sac = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token = sac.address();
+    let sac_admin = StellarAssetClient::new(&env, &token);
+    let (client, admin, sme) = setup(&env);
+    let (_, treasury) = free_addresses(&env);
+    client.init(
+        &admin,
+        &String::from_str(&env, "CLOSE-CANCELLED"),
+        &sme,
+        &1_000i128,
+        &100i64,
+        &0u64,
+        &token,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+
+    let investor = Address::generate(&env);
+    sac_admin.mint(&investor, &500i128);
+    client.fund(&investor, &500i128);
+    client.cancel_funding(&0u32);
+
+    let result = client.try_close_escrow();
+    match result {
+        Err(Err(InvokeError::Contract(code))) => {
+            assert_eq!(code, crate::CloseError::ActiveBalance as u32);
+        }
+        other => panic!("expected active balance error, got {other:?}"),
+    }
+
+    client.refund(&investor);
+    client.close_escrow();
+    assert!(client.get_closure_metadata().is_some());
 }
 
 #[test]

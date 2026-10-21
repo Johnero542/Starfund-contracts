@@ -250,6 +250,7 @@ fn test_callback_after_cancellation_rejected() {
     // Cancel funding (transitions status to 4)
     client.cancel_funding(&0u32);
     assert_eq!(client.get_escrow().status, 4);
+    assert_eq!(client.get_callback(&nonce), None);
 
     // Attempt callback execution after cancellation — still uses CallbackAfterCancellation
     assert_contract_error(
