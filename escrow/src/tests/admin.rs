@@ -3,7 +3,8 @@ use crate::{
     AdminAcceptedEvent, AdminProposalCancelled, AdminProposalSuperseded, AdminProposedEvent,
     DeprecatedTransferAdminUsed, EscrowCloseSnapshot, FundingStateChanged, FundingTargetUpdated,
     MaturityMaxHorizonRaised, PayerRotated, ProtocolFeeUpdated, RegistryRefRebound,
-    DEFAULT_MATURITY_MAX_HORIZON_SECS, MAX_INVOICE_AMOUNT,
+    DEFAULT_MATURITY_MAX_HORIZON_SECS, MAX_ADMIN_PROPOSAL_VALIDITY_SECS,
+    MAX_INVOICE_AMOUNT, MIN_ADMIN_PROPOSAL_VALIDITY_SECS,
 };
 
 use soroban_sdk::Event;
@@ -1378,6 +1379,103 @@ fn test_record_collateral_stored_and_does_not_block_settle() {
     client.fund(&investor, &TARGET);
     let settled = client.settle();
     assert_eq!(settled.escrow.status, 2);
+}
+
+#[test]
+fn test_batch_record_collateral_preserves_every_item() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    client.init(
+        &admin,
+        &soroban_sdk::String::from_str(&env, "COL_BATCH"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &0u64,
+        &Address::generate(&env),
+        &None,
+        &Address::generate(&env),
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+
+    let items = soroban_sdk::vec![
+        &env,
+        (symbol_short!("GOLD"), 100i128),
+        (symbol_short!("SILVER"), 200i128),
+        (symbol_short!("XLM"), 300i128),
+    ];
+    let last = client.batch_record_collateral(&items);
+    let commitments = client.get_sme_collateral_commitments();
+
+    assert_eq!(commitments.len(), 3);
+    assert_eq!(commitments.get(0).unwrap().asset, symbol_short!("GOLD"));
+    assert_eq!(commitments.get(0).unwrap().amount, 100i128);
+    assert_eq!(commitments.get(1).unwrap().asset, symbol_short!("SILVER"));
+    assert_eq!(commitments.get(1).unwrap().amount, 200i128);
+    assert_eq!(commitments.get(2).unwrap(), last);
+    assert_eq!(client.get_sme_collateral_commitment(), Some(last));
+}
+
+#[test]
+fn test_collateral_recording_requires_unpaused_open_escrow() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    client.init(
+        &admin,
+        &soroban_sdk::String::from_str(&env, "COL_GUARDS"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &0u64,
+        &Address::generate(&env),
+        &None,
+        &Address::generate(&env),
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+
+    let asset = symbol_short!("USDC");
+    let items = soroban_sdk::vec![&env, (asset.clone(), 100i128)];
+    client.set_paused(&true, &crate::PauseScope::All, &crate::PauseReason::Incident);
+    assert_contract_error(
+        client.try_record_sme_collateral_commitment(&asset, &100i128),
+        EscrowError::PausedBlocksCollateral,
+    );
+    assert_contract_error(
+        client.try_batch_record_collateral(&items),
+        EscrowError::PausedBlocksCollateral,
+    );
+
+    client.set_paused(&false, &crate::PauseScope::All, &crate::PauseReason::Incident);
+    let investor = Address::generate(&env);
+    client.fund(&investor, &TARGET);
+    assert_eq!(client.settle().escrow.status, 2);
+
+    assert_contract_error(
+        client.try_record_sme_collateral_commitment(&asset, &100i128),
+        EscrowError::CollateralNotOpen,
+    );
+    assert_contract_error(
+        client.try_batch_record_collateral(&items),
+        EscrowError::CollateralNotOpen,
+    );
 }
 
 #[test]
@@ -3973,11 +4071,10 @@ fn test_update_maturity_max_horizon_default_fallback() {
     );
 }
 
-/// Lowering the horizon must NOT retroactively invalidate an already-set
-/// maturity. A subsequent `update_maturity` call targeting `now + new_horizon + 1`
-/// must be rejected; the stored maturity must remain intact throughout.
+/// Lowering the horizon must be rejected if it would put the existing maturity
+/// beyond the newly configured ceiling.
 #[test]
-fn test_lowered_horizon_existing_maturity_untouched_and_far_update_rejected() {
+fn test_update_horizon_cannot_invalidate_existing_maturity() {
     let env = Env::default();
     let (client, admin, sme) = setup(&env);
     let (token, treasury) = free_addresses(&env);
@@ -4007,29 +4104,20 @@ fn test_lowered_horizon_existing_maturity_untouched_and_far_update_rejected() {
 
     assert_eq!(client.get_escrow().maturity, 2_000u64);
 
-    // Lower the horizon to 500 s: new ceiling = now(1_000) + 500 = 1_500.
-    // The existing maturity (2_000) is beyond that ceiling but must survive unchanged.
-    client.update_maturity_max_horizon(&500u64);
+    // Lowering to 500 s would put the ceiling at 1_500, below the existing maturity.
+    assert_contract_error(
+        client.try_update_maturity_max_horizon(&500u64),
+        EscrowError::MaturityExceedsMaxHorizon,
+    );
+    assert_eq!(
+        client.get_maturity_max_horizon(),
+        DEFAULT_MATURITY_MAX_HORIZON_SECS,
+        "a rejected horizon update must not change the configured horizon"
+    );
     assert_eq!(
         client.get_escrow().maturity,
         2_000u64,
-        "lowering the horizon must not retroactively invalidate an already-set maturity"
-    );
-
-    // A subsequent update to 1_501 (one second beyond the new ceiling) must fail.
-    assert!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.update_maturity(&1_501u64, &0u32);
-        }))
-        .is_err(),
-        "update_maturity beyond the new horizon must be rejected"
-    );
-
-    // The stored maturity must remain 2_000 after the failed update attempt.
-    assert_eq!(
-        client.get_escrow().maturity,
-        2_000u64,
-        "a rejected update_maturity call must not alter the stored maturity"
+        "a rejected horizon update must leave the configured maturity intact"
     );
 }
 
@@ -4225,7 +4313,7 @@ fn test_raise_maturity_max_horizon_succeeds() {
     assert_eq!(client.get_maturity_max_horizon(), default_horizon);
 
     let new_horizon = default_horizon + 3_600;
-    let returned = client.raise_maturity_max_horizon(&new_horizon);
+    let returned = client.raise_maturity_max_horizon(&new_horizon, &0u32);
     assert_eq!(returned, new_horizon);
     assert_eq!(client.get_maturity_max_horizon(), new_horizon);
 }
@@ -4259,7 +4347,7 @@ fn test_raise_maturity_max_horizon_not_raised_panics() {
 
     let default_horizon = DEFAULT_MATURITY_MAX_HORIZON_SECS;
     assert_contract_error(
-        client.try_raise_maturity_max_horizon(&default_horizon),
+        client.try_raise_maturity_max_horizon(&default_horizon, &0u32),
         EscrowError::HorizonNotRaised,
     );
 }
@@ -4295,7 +4383,7 @@ fn test_raise_maturity_max_horizon_emits_event() {
 
     let old_horizon = DEFAULT_MATURITY_MAX_HORIZON_SECS;
     let new_horizon = old_horizon + 7_200;
-    client.raise_maturity_max_horizon(&new_horizon);
+    client.raise_maturity_max_horizon(&new_horizon, &0u32);
 
     let all_events = env.events().all();
     let expected = MaturityMaxHorizonRaised {
@@ -4310,6 +4398,52 @@ fn test_raise_maturity_max_horizon_emits_event() {
             .contains(&expected.to_xdr(&env, &client.address)),
         "MaturityMaxHorizonRaised event must be emitted"
     );
+}
+
+#[test]
+fn test_raise_maturity_max_horizon_requires_current_admin_nonce() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let (token, treasury) = free_addresses(&env);
+    client.init(
+        &admin,
+        &soroban_sdk::String::from_str(&env, "RMMH004"),
+        &sme,
+        &1_000i128,
+        &500i64,
+        &0u64,
+        &token,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+
+    let old_horizon = DEFAULT_MATURITY_MAX_HORIZON_SECS;
+    let new_horizon = old_horizon + 3_600;
+    assert_contract_error(
+        client.try_raise_maturity_max_horizon(&new_horizon, &1u32),
+        EscrowError::AdminNonceMismatch,
+    );
+    assert_eq!(client.get_maturity_max_horizon(), old_horizon);
+
+    assert_eq!(
+        client.raise_maturity_max_horizon(&new_horizon, &0u32),
+        new_horizon
+    );
+    assert_contract_error(
+        client.try_raise_maturity_max_horizon(&(new_horizon + 1), &0u32),
+        EscrowError::AdminNonceMismatch,
+    );
+    assert_eq!(client.get_maturity_max_horizon(), new_horizon);
 }
 // ── Issue #552: get_pending_admin_remaining_secs ─────────────────────────────
 
@@ -4406,4 +4540,127 @@ fn test_set_storage_limit_nonce_replay_and_event() {
         }
         .to_xdr(&env, &contract_id)
     );
+}
+
+// ── Issue #239: propose_admin validity-window bounds ─────────────────────────
+//
+// propose_admin must reject custom validity windows that exceed
+// MAX_ADMIN_PROPOSAL_VALIDITY_SECS (30 days) or fall below
+// MIN_ADMIN_PROPOSAL_VALIDITY_SECS (1 hour).
+
+/// A custom validity window exceeding MAX_ADMIN_PROPOSAL_VALIDITY_SECS must
+/// revert with [`EscrowError::AdminProposalValidityTooLong`].
+#[test]
+fn test_propose_admin_validity_window_too_long_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    let new_admin = Address::generate(&env);
+    let too_long = MAX_ADMIN_PROPOSAL_VALIDITY_SECS + 1;
+
+    assert_contract_error(
+        client.try_propose_admin(&new_admin, &0u32, &Some(too_long)),
+        EscrowError::AdminProposalValidityTooLong,
+    );
+    // No pending admin must have been set.
+    assert!(client.get_pending_admin().is_none());
+}
+
+/// A custom validity window at exactly MAX_ADMIN_PROPOSAL_VALIDITY_SECS must succeed.
+#[test]
+fn test_propose_admin_validity_window_at_max_boundary_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    let new_admin = Address::generate(&env);
+    let at_max = MAX_ADMIN_PROPOSAL_VALIDITY_SECS;
+
+    client.propose_admin(&new_admin, &0u32, &Some(at_max));
+    assert_eq!(client.get_pending_admin(), Some(new_admin));
+    assert_eq!(
+        client.get_pending_admin_expiry(),
+        Some(at_max),  // timestamp starts at 0 in tests
+    );
+}
+
+/// A custom validity window below MIN_ADMIN_PROPOSAL_VALIDITY_SECS must
+/// revert with [`EscrowError::AdminProposalValidityTooShort`].
+#[test]
+fn test_propose_admin_validity_window_too_short_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    let new_admin = Address::generate(&env);
+    let too_short = MIN_ADMIN_PROPOSAL_VALIDITY_SECS - 1;
+
+    assert_contract_error(
+        client.try_propose_admin(&new_admin, &0u32, &Some(too_short)),
+        EscrowError::AdminProposalValidityTooShort,
+    );
+    assert!(client.get_pending_admin().is_none());
+}
+
+/// A custom validity window at exactly MIN_ADMIN_PROPOSAL_VALIDITY_SECS must succeed.
+#[test]
+fn test_propose_admin_validity_window_at_min_boundary_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    let new_admin = Address::generate(&env);
+    let at_min = MIN_ADMIN_PROPOSAL_VALIDITY_SECS;
+
+    client.propose_admin(&new_admin, &0u32, &Some(at_min));
+    assert_eq!(client.get_pending_admin(), Some(new_admin));
+}
+
+/// The default window (None) must succeed and falls within [MIN, MAX].
+#[test]
+fn test_propose_admin_default_window_within_bounds_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    let new_admin = Address::generate(&env);
+    client.propose_admin(&new_admin, &0u32, &None);
+    assert!(client.get_pending_admin().is_some());
+}
+
+/// recover_admin is guaranteed to become executable once the bounded validity
+/// window has elapsed. The cap ensures expiry is always reachable.
+#[test]
+fn test_recover_admin_reachable_after_bounded_window_expires() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    env.ledger().set_timestamp(1_000);
+    let new_admin = Address::generate(&env);
+    // Use the maximum allowed window.
+    client.propose_admin(&new_admin, &0u32, &Some(MAX_ADMIN_PROPOSAL_VALIDITY_SECS));
+
+    let expiry = client.get_pending_admin_expiry().expect("expiry set");
+    assert_eq!(expiry, 1_000 + MAX_ADMIN_PROPOSAL_VALIDITY_SECS);
+
+    // Before expiry — recover_admin must fail.
+    env.ledger().set_timestamp(expiry);
+    assert_contract_error(
+        client.try_recover_admin(&soroban_sdk::String::from_str(&env, "not yet")),
+        EscrowError::AdminRecoveryNotExpired,
+    );
+
+    // After expiry — recover_admin must succeed.
+    env.ledger().set_timestamp(expiry + 1);
+    let recovered = client.recover_admin(&soroban_sdk::String::from_str(&env, "recovery"));
+    assert_eq!(recovered, admin);
+    assert!(client.get_pending_admin().is_none());
 }
