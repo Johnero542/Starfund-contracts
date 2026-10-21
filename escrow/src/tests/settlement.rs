@@ -861,19 +861,47 @@ fn claim_investor_payout_before_settle_panics() {
     client.claim_investor_payout(&investor);
 }
 
-/// An investor that did not participate cannot claim.
+/// An investor that did not participate cannot claim or receive a claimed marker.
 #[test]
-#[should_panic]
-fn claim_investor_payout_non_participant_panics() {
+fn claim_investor_payout_non_participant_has_no_side_effects() {
     let env = Env::default();
     let (client, admin, sme) = setup(&env);
-    env.mock_all_auths_allowing_non_root_auth();
-    env.mock_auths(&[]);
     default_init(&client, &env, &admin, &sme);
     settle_escrow(&client, &env);
 
     let stranger = Address::generate(&env);
-    client.claim_investor_payout(&stranger);
+    let event_count = env.events().all().events().len();
+    assert_contract_error(
+        client.try_claim_investor_payout(&stranger),
+        EscrowError::NoContributionToClaim,
+    );
+    assert!(!client.is_investor_claimed(&stranger));
+    assert_eq!(env.events().all().events().len(), event_count);
+}
+
+#[test]
+fn claim_investor_payout_after_full_unfund_has_no_side_effects() {
+    let env = Env::default();
+    let (client, token, _contract_id, _treasury) = setup_claim_env(&env, "UNFUNDED", 2_000, 800);
+    let quitter = Address::generate(&env);
+    let stayer = Address::generate(&env);
+    token.stellar.mint(&quitter, &1_000);
+    token.stellar.mint(&stayer, &2_000);
+
+    client.fund(&quitter, &1_000);
+    client.fund(&stayer, &1_000);
+    client.unfund(&quitter, &1_000);
+    client.fund(&stayer, &1_000);
+    client.settle();
+
+    assert_eq!(client.get_contribution(&quitter), 0);
+    let event_count = env.events().all().events().len();
+    assert_contract_error(
+        client.try_claim_investor_payout(&quitter),
+        EscrowError::NoContributionToClaim,
+    );
+    assert!(!client.is_investor_claimed(&quitter));
+    assert_eq!(env.events().all().events().len(), event_count);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -3768,7 +3796,7 @@ fn update_yield_bps_fails_when_cancelled() {
     let env = Env::default();
     let (client, _admin) = setup_yield_bps_test(&env, "YLD_ST_03", 800);
 
-    client.cancel_funding();
+    client.cancel_funding(&0u32);
     assert_eq!(client.get_escrow().status, 4u32);
 
     assert_contract_error(

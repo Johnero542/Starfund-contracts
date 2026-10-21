@@ -16,6 +16,28 @@ All events follow the Soroban `contractevent` format. Key fields like `invoice_i
 
 ## 📋 Event Catalog
 
+### `FeeScheduleSubmitted`
+Emitted when the admin successfully stages a pending fee schedule. Re-submitting the identical
+pending schedule is idempotent and emits no additional event.
+
+**Topics:**
+1. `fee_sub` (Symbol)
+2. `invoice_id` (Symbol)
+
+**Data Payload:**
+- `schedule` (`FeeSchedule`)
+
+### `FeeScheduleActivated`
+Emitted when a pending fee schedule is promoted at or after its activation ledger.
+
+**Topics:**
+1. `fee_act` (Symbol)
+2. `invoice_id` (Symbol)
+
+**Data Payload:**
+- `schedule` (`FeeSchedule`) — newly active schedule.
+- `previous` (`Option<FeeSchedule>`) — schedule active before promotion, if any.
+
 ### `EscrowInitialized`
 Emitted once by `init()`. Carries the escrow snapshot plus immutable bound references so
 indexers can register `funding_token`, `treasury`, and optional `registry` without follow-up reads.
@@ -130,7 +152,7 @@ Emitted when the SME finalizes the escrow after maturity.
 - `yield_bps` (i64)
 - `maturity` (u64)
 - `settled_at_ledger_timestamp` (u64) — the ledger timestamp when `settle` was called
-- `settle_pool` (i128) — total investor liability rounded down once across all investor entitlements. For uniform yield this is `total_principal + floor(total_principal × yield_bps / 10_000)`; mixed tiers use their effective yields. Fractional base units are assigned by largest remainder, with funding order breaking ties.
+- `settle_pool` (i128) — nominal base-yield settlement pool: `total_principal + floor(total_principal × yield_bps / 10_000)`. The exact aggregate claim liability, including minimum-coupon units, is returned by `get_settlement_pool()`.
 
 **Example (JSON Decoded):**
 ```json

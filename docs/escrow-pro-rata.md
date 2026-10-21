@@ -11,13 +11,14 @@ $$Share_{investor} = \frac{Contribution_{investor}}{TotalPrincipal_{snapshot}}$$
 ### Why `TotalPrincipal`?
 Starfund escrows allow **over-funding** (deposits that exceed the `funding_target` in the same ledger). The `TotalPrincipal` in the `FundingCloseSnapshot` is the authoritative denominator for all pro-rata calculations.
 
-## 📏 Rounding Policy
+## Rounding Policy
 
-To ensure protocol solvency and prevent "penny-bleeding" attacks, integrators should follow these rounding rules:
-
-1.  **Investor Payouts**: Calculate each floor payout and its fractional remainder, then award the aggregate whole-unit residue to the largest remainders. Ties follow `InvestorIndex` funding order.
-2.  **Aggregate Liability**: Round the sum of exact investor entitlements down once. The sum of individual payouts equals this amount.
-3.  **Intermediate Math**: Use high-precision rational arithmetic (e.g., `BigInt` or 256-bit fixed point) before applying the largest-remainder allocation.
+Investor payouts use floor-rounded pro-rata math. If a positive yield would
+otherwise leave an investor with principal only, the contract adds one token
+base unit as the minimum coupon. This avoids erasing a positive yield entirely
+for small positions. Consequently, the aggregate claim liability may exceed the
+nominal floor-rounded pool by at most one base unit per investor. Use
+`get_settlement_pool()` for the exact aggregate claim liability.
 
 ## 📝 Example Calculation
 
@@ -91,13 +92,13 @@ and authorization documentation.
 When all investors share the same `yield_bps`:
 
 ```
-settled_pool = total_principal + total_principal × yield_bps / 10_000   (floor)
-Σ payout_i  = settled_pool
+nominal_pool = total_principal + floor(total_principal × yield_bps / 10_000)
+Σ payout_i ≤ nominal_pool + n_investors
 ```
 
-The contract first floors each investor's exact payout, then assigns the remaining whole base units
-to investors in descending remainder order. Equal remainders are resolved by `InvestorIndex`
-funding order. No settlement-pool units are left undistributed due to per-investor truncation.
+The additional bound accounts for at most one minimum-coupon unit per investor.
+`get_settlement_pool()` returns the exact sum of investor payouts and is the
+authoritative funding target for claims.
 
 ### Tiered / mixed yield
 
@@ -106,28 +107,32 @@ each investor `i` has their own `settle_pool_i`:
 
 ```
 settle_pool_i = total_principal + floor(total_principal × effective_yield_bps_i / 10_000)
-base_i        = floor(contribution_i × settle_pool_i / total_principal)
-payout_i      = base_i + largest_remainder_adjustment_i
+payout_i      = floor(contribution_i × settle_pool_i / total_principal)
+if effective_yield_bps_i > 0 and payout_i == contribution_i:
+    payout_i += 1
 ```
 
-The aggregate pool is the total rational liability rounded down once:
+The minimum-coupon rule can add at most one base unit to each floor-rounded
+entitlement, so:
 
 ```
-get_settlement_pool() = Σ base_i + floor(Σ remainder_i / total_principal)
+Σ payout_i ≤ Σ exact_i + n_investors
+           ≤ total_principal × (1 + max_effective_yield_bps / 10_000) + n_investors
 ```
 
-The base-yield pool is only valid when every investor shares the same effective yield. For mixed
-tiers, `get_settlement_pool()` returns the tier-weighted liability and `settle()` checks that the
-contract balance covers that amount.
+> ⚠️ **The nominal base-yield pool is not the tier-weighted pool.** The single `settled_pool`
+> quoted above (`total_principal + total_principal × yield_bps / 10_000`) is only valid
+> when every investor shares the same effective yield. Under mixed tiers it is a **lower
+> bound** on the real liability (and minimum-coupon units may increase it further), and repaying only that amount leaves the contract
+> under-funded for the last claimants. `get_settlement_pool()` therefore returns the
+> **exact aggregate sum** `Σ payout_i`, not the nominal base-yield figure — see
+> [On-Chain Aggregate View](#-on-chain-aggregate-view-get_settlement_pool).
 
 ### Rounding guarantee
 
-The largest-remainder allocation preserves the aggregate liability while distributing fractional
-base units fairly and deterministically:
-
-- Each investor receives either the floor or ceiling of their exact rational entitlement.
-- The aggregate never exceeds the exact weighted sum of entitlements.
-- The difference between the exact weighted sum and integer payouts is less than one base unit.
+Floor rounding favors the contract; the one-base-unit minimum coupon intentionally
+favors each investor whose positive yield would otherwise be rounded away. The
+aggregate claim liability remains exactly queryable through `get_settlement_pool()`.
 
 ### Snapshot-denominator consistency
 
@@ -147,12 +152,12 @@ and after every individual payout call and asserts identity.
 | `prop_payout_sum_le_settle_pool` | Uniform yield, 2–6 investors, arbitrary amounts & yield; exact pool conservation |
 | `prop_aggregate_payout_le_settle_pool_tiered` | Tiered/mixed yield, snapshot consistency, max-pool bound |
 | `payout_single_investor_equals_settle_pool` | Single investor receives exact `settle_pool` |
-| `payout_equal_split_conservation` | Equal contributions, sum equals `settle_pool` |
+| `payout_equal_split_conservation` | Equal contributions, minimum-coupon aggregate bound |
 | `payout_zero_yield_returns_principal_only` | Zero yield: `payout_i == contribution_i` |
 | `payout_max_yield_conservation` | 100% yield: conservation still holds |
 | `payout_prime_denominator_residue_bounded` | Prime total, largest-remainder conservation |
 | `payout_highly_skewed_contributions` | 99%/1% split; residue bounded |
-| `payout_many_small_investors_conservation` | 8 investors × 1 unit; aggregate equals `settle_pool` |
+| `payout_many_small_investors_conservation` | 8 investors × 1 unit; minimum coupon per investor |
 | `payout_single_large_single_tiny` | Extreme asymmetry stress test |
 | `payout_tiered_mixed_yield_conservation` | 3-tier mixed yield; per-investor & exact aggregate allocation |
 | `snapshot_denominator_consistent_across_all_payout_reads` | Snapshot immutable across all reads |

@@ -411,17 +411,18 @@ Floor rounding means any sub-`10_000`-unit residue stays with the SME. With
 
 ## 21. Pro-Rata Aggregate Payout Bound
 
-**Invariant:** The sum of all `compute_investor_payout` values equals the settlement pool,
-rounded down once across all investor entitlements.
+**Invariant:** The sum of all `compute_investor_payout` values is bounded by the nominal
+floor-rounded settlement pool plus one token base unit per investor. The exact sum is exposed
+by `get_settlement_pool`.
 
 ```
-settle_pool = total_principal + floor(total_principal × yield_bps / 10_000)
-Σ payout_i = settle_pool
+nominal_pool = total_principal + floor(total_principal × yield_bps / 10_000)
+Σ payout_i ≤ nominal_pool + investor_count
 ```
 
-For uniform yield, the aggregate remainder is distributed by largest remainder; ties use
-`InvestorIndex` funding order. For tiered yield, `get_settlement_pool()` returns the corresponding
-tier-weighted liability and `settle()` checks that amount.
+When positive yield would otherwise be rounded away and an investor would receive only
+principal, their payout receives one minimum-coupon base unit. `get_settlement_pool` sums
+these exact payouts and should be used as the claim funding target.
 
 **Where enforced:**
 - `compute_investor_payout` uses `checked_mul` / `checked_div` with
@@ -429,7 +430,7 @@ tier-weighted liability and `settle()` checks that amount.
 - `claim_investor_payout` — rejects a zero payout with `EscrowError::PayoutZero` (170) before
   transferring.
 - Property tests in `escrow/src/tests/properties.rs`:
-  - `prop_payout_sum_le_settle_pool` (uniform yield, 2–6 investors)
+  - `prop_payout_sum_le_settle_pool` (uniform yield, 2–6 investors, minimum-coupon bound)
   - `prop_aggregate_payout_le_settle_pool_tiered` (mixed/tiered yield, snapshot denominator
     consistency)
   - `fuzz_payout_conservation_multi_investor` (64-case fuzz, 1–8 investors, full yield range)
