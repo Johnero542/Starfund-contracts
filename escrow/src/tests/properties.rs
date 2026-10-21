@@ -4,6 +4,82 @@ use std::collections::BTreeSet;
 
 proptest! {
     #[test]
+    fn prop_interleaved_fund_unfund_preserves_accounting(
+        actions in proptest::collection::vec(
+            (any::<bool>(), 0usize..6, 1i128..=100_000i128),
+            1usize..=20,
+        ),
+    ) {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let sme = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let token = install_stellar_asset_token(&env);
+        let (contract_id, client) = deploy_with_id(&env);
+        let investors: Vec<Address> = (0..6).map(|_| Address::generate(&env)).collect();
+        let initial_balance = 2_000_000i128;
+
+        client.init(
+            &admin,
+            &soroban_sdk::String::from_str(&env, "FUNDUNFUND"),
+            &sme,
+            &3_000_000i128,
+            &0i64,
+            &0u64,
+            &token.id,
+            &None,
+            &treasury,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None::<i64>,
+            &None::<u32>,
+        );
+
+        for investor in &investors {
+            token.stellar.mint(investor, &initial_balance);
+        }
+
+        let mut contributions = vec![0i128; investors.len()];
+
+        for (is_fund, investor_ix, amount) in actions {
+            let investor_ix = investor_ix % investors.len();
+            let investor = &investors[investor_ix];
+
+            if is_fund {
+                client.fund(investor, &amount);
+                contributions[investor_ix] += amount;
+            } else {
+                let unfund_amount = amount.min(contributions[investor_ix]);
+                if unfund_amount > 0 {
+                    client.unfund(investor, &unfund_amount);
+                    contributions[investor_ix] -= unfund_amount;
+                }
+            }
+
+            let expected_funded: i128 = contributions.iter().sum();
+            let expected_unique_funders = contributions
+                .iter()
+                .filter(|&&value| value > 0)
+                .count() as u32;
+
+            prop_assert_eq!(client.get_escrow().funded_amount, expected_funded);
+            prop_assert_eq!(client.get_unique_funder_count(), expected_unique_funders);
+            prop_assert_eq!(token.token.balance(&contract_id), expected_funded);
+            for (ix, expected_contribution) in contributions.iter().enumerate() {
+                prop_assert_eq!(client.get_contribution(&investors[ix]), *expected_contribution);
+            }
+        }
+    }
+
+    #[test]
     fn prop_funded_amount_non_decreasing(
         amount1 in 1i128..50_000_000_000i128,
         amount2 in 1i128..50_000_000_000i128,
