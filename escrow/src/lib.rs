@@ -1935,6 +1935,13 @@ pub struct EscrowSummary {
     pub paused: bool,
     /// Immutable protocol fee in basis points applied at withdraw; `0` before init.
     pub protocol_fee_bps: i64,
+    /// Whether an active dispute is currently freeze-blocking release paths.
+    /// Defaults to `false` when the `Dispute` key is absent (no dispute ever recorded).
+    pub dispute_active: bool,
+    /// Optional funding deadline (ledger timestamp); `None` when not set.
+    pub funding_deadline: Option<u64>,
+    /// Funding-token decimal scale configured at init; `None` when not set.
+    pub token_decimals: Option<u32>,
 }
 
 /// Bundled settlement-readiness snapshot returned by
@@ -4564,6 +4571,12 @@ impl StarfundEscrow {
             attestation_log_length: attestation_append_log.len(),
             paused: Self::is_paused(env.clone()),
             protocol_fee_bps: Self::get_protocol_fee_bps(env.clone()),
+            dispute_active: Self::is_dispute_active(env.clone()),
+            funding_deadline: Self::get_funding_deadline(env.clone()),
+            token_decimals: env
+                .storage()
+                .instance()
+                .get::<DataKey, u32>(&keys::funding_token_scale()),
         }
     }
 
