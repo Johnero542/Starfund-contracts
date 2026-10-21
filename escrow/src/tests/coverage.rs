@@ -169,6 +169,14 @@ fn escrow_error_discriminants_are_unique() {
         EscrowError::EscrowNotInitialized,
         EscrowError::FundingTokenNotSet,
         EscrowError::TreasuryNotSet,
+        EscrowError::MaxPerInvestorCapNotConfigured,
+        EscrowError::MaxPerInvestorCapNotRaised,
+        EscrowError::MaxPerInvestorCapNotPositive,
+        EscrowError::MaxPerInvestorCapNotLowered,
+        EscrowError::PerInvestorCapLowerNotOpen,
+        EscrowError::PerInvestorCapExceedsFundingTarget,
+        EscrowError::PerInvestorCapBelowMinContributionFloor,
+        EscrowError::HorizonNotRaised,
         EscrowError::LegalHoldBlocksTreasuryDustSweep,
         EscrowError::SweepAmountNotPositive,
         EscrowError::SweepAmountExceedsMax,
@@ -271,6 +279,8 @@ fn escrow_error_discriminants_are_unique() {
         EscrowError::PausedBlocksSettlement,
         EscrowError::PausedBlocksWithdrawal,
         EscrowError::PausedBlocksInvestorClaims,
+        EscrowError::CollateralNotOpen,
+        EscrowError::PausedBlocksCollateral,
         EscrowError::ProtocolFeeBpsOutOfRange,
         EscrowError::WithdrawFeeArithmeticOverflow,
         EscrowError::WithdrawNetArithmeticUnderflow,
@@ -342,6 +352,11 @@ fn escrow_error_discriminants_match_canonical_table() {
         (EscrowError::EscrowNotInitialized, 20),
         (EscrowError::FundingTokenNotSet, 21),
         (EscrowError::TreasuryNotSet, 22),
+        (EscrowError::MaxPerInvestorCapNotConfigured, 24),
+        (EscrowError::MaxPerInvestorCapNotRaised, 25),
+        (EscrowError::MaxPerInvestorCapNotPositive, 26),
+        (EscrowError::MaxPerInvestorCapNotLowered, 27),
+        (EscrowError::PerInvestorCapLowerNotOpen, 28),
         (EscrowError::LegalHoldBlocksTreasuryDustSweep, 30),
         (EscrowError::SweepAmountNotPositive, 31),
         (EscrowError::SweepAmountExceedsMax, 32),
@@ -414,12 +429,15 @@ fn escrow_error_discriminants_match_canonical_table() {
         (EscrowError::NewSmeSameAsCurrent, 162),
         (EscrowError::FundingDeadlinePassed, 164),
         (EscrowError::NoPendingAdmin, 250),
+        (EscrowError::PerInvestorCapExceedsFundingTarget, 268),
+        (EscrowError::PerInvestorCapBelowMinContributionFloor, 270),
+        (EscrowError::HorizonNotRaised, 271),
         (EscrowError::FloorLowerNotOpen, 269),
         (EscrowError::NewFloorNotLower, 262),
         (EscrowError::NewFloorNotPositive, 261),
         (EscrowError::FundingTokenDecimalsMismatch, 268),
     ];
-    assert_eq!(TABLE.len(), 92);
+    assert_eq!(TABLE.len(), 99);
     for (variant, code) in TABLE {
         assert_eq!(*variant as u32, *code, "discriminant drift for code {code}");
     }
@@ -3981,7 +3999,7 @@ fn test_state_machine_illegal_transitions_rejected() {
         &None::<u32>,);
 
     // 3. Cancel client2 to reach Status 4 (Cancelled)
-    client2.cancel_funding();
+    client2.cancel_funding(&0u32);
     assert_eq!(client2.get_escrow().status, 4);
 
     // In Status 4 (Cancelled):
