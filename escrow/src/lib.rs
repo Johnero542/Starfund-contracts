@@ -3974,23 +3974,31 @@ impl StarfundEscrow {
         let sweep_amt = amount.min(balance);
         ensure(&env, sweep_amt > 0, EscrowError::EffectiveSweepAmountZero);
 
-        // Liability floor (cancelled escrows only): sweep must not reduce the balance below
-        // principal still owed to investors who have not yet called refund().
+        // Liability floor: sweep must not reduce the balance below the amount owed to investors.
         //
-        // In settled (2) and withdrawn (3) states, disbursement is off-chain and
-        // distributed_principal stays 0, so the floor is not applicable there.
-        // In cancelled (4) state, refund() is the on-chain redemption path and increments
-        // distributed_principal atomically, making the invariant computable here.
+        // In settled (2) state: liability includes yield coupon (settle_pool), and payouts
+        // are off-chain via claim_investor_payout, which increments distributed_principal.
         //
-        // outstanding = funded_amount - distributed_principal
+        // In withdrawn (3) state: disbursement is off-chain and distributed_principal stays 0,
+        // so there is no on-chain outstanding liability to protect.
+        //
+        // In cancelled (4) state: refund() is the on-chain redemption path and increments
+        // distributed_principal atomically. Liability is the original funded_amount.
+        //
+        // outstanding = liability_base - distributed_principal
         // Invariant: balance - sweep_amt >= outstanding
-        if escrow.status == 4 {
+        if escrow.status == 2 || escrow.status == 4 {
             let distributed: i128 = env
                 .storage()
                 .instance()
                 .get(&DataKey::DistributedPrincipal)
                 .unwrap_or(0);
-            let outstanding = escrow.funded_amount.saturating_sub(distributed);
+            let liability_base = if escrow.status == 2 {
+                escrow.settle_pool
+            } else {
+                escrow.funded_amount
+            };
+            let outstanding = liability_base.saturating_sub(distributed);
             // sweep_amt <= balance (from amount.min(balance) above), so this subtraction is safe.
             let balance_after_sweep = balance - sweep_amt;
             ensure(
@@ -7949,6 +7957,7 @@ impl StarfundEscrow {
 
         guard_not_paused(&env, EscrowError::PausedBlocksRelease);
         guard_not_legal_hold(&env, EscrowError::LegalHoldBlocksRelease);
+        guard_not_disputed(&env, EscrowError::DisputeBlocksRelease);
 
         // Load escrow, but require admin authorization.
         let escrow: InvoiceEscrow = env
@@ -7976,18 +7985,37 @@ impl StarfundEscrow {
             EscrowError::ReleaseExceedsRemaining,
         );
 
-        // Immutable protocol fee split. `fee = amount * fee_bps / 10_000` (floor), with the
-        // remainder going to the SME. All arithmetic is checked. Conservation `net + fee == amount`
-        // holds by construction.
+        // Protocol fee calculation with cumulative remainder tracking to prevent truncation loss
+        // across multi-tranche releases. `fee = (amount * fee_bps + accrual_remainder) / 10_000`,
+        // with fractional remainder persisted for the next call.
         let fee_bps: i64 = env
             .storage()
             .instance()
             .get(&DataKey::ProtocolFeeBps)
             .unwrap_or(0);
-        let fee: i128 = amount
+        let accrual_remainder: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeAccrualRemainder)
+            .unwrap_or(0);
+
+        let scaled: i128 = amount
             .checked_mul(fee_bps as i128)
-            .and_then(|scaled| scaled.checked_div(10_000))
             .unwrap_or_else(|| fail(&env, EscrowError::ReleaseFeeArithmeticOverflow));
+        let scaled_plus_accrual: i128 = scaled
+            .checked_add(accrual_remainder)
+            .unwrap_or_else(|| fail(&env, EscrowError::ReleaseFeeArithmeticOverflow));
+
+        let fee: i128 = scaled_plus_accrual.checked_div(10_000)
+            .unwrap_or_else(|| fail(&env, EscrowError::ReleaseFeeArithmeticOverflow));
+        let new_remainder: i128 = scaled_plus_accrual
+            .checked_rem(10_000)
+            .unwrap_or_else(|| fail(&env, EscrowError::ReleaseFeeArithmeticOverflow));
+
+        env.storage()
+            .instance()
+            .set(&DataKey::FeeAccrualRemainder, &new_remainder);
+
         let net: i128 = amount
             .checked_sub(fee)
             .unwrap_or_else(|| fail(&env, EscrowError::ReleaseNetArithmeticUnderflow));
@@ -8131,19 +8159,37 @@ impl StarfundEscrow {
         ensure(&env, amount > 0, EscrowError::NothingToWithdraw);
         let sme = escrow.sme_address.clone();
 
-        // Immutable protocol fee split. `fee = funded_amount * fee_bps / 10_000` (floor), with the
-        // remainder going to the SME. All arithmetic is checked: `funded_amount` may exceed the
-        // overflow-safe envelope when an escrow is over-funded, so the multiplication is the only
-        // place this can overflow. Conservation `net + fee == funded_amount` holds by construction.
+        // Protocol fee calculation with cumulative remainder tracking to prevent truncation loss
+        // when withdraw follows multiple release calls. `fee = (amount * fee_bps + accrual_remainder) / 10_000`,
+        // with fractional remainder persisted for accounting consistency.
         let fee_bps: i64 = env
             .storage()
             .instance()
             .get(&DataKey::ProtocolFeeBps)
             .unwrap_or(0);
-        let fee: i128 = amount
+        let accrual_remainder: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeAccrualRemainder)
+            .unwrap_or(0);
+
+        let scaled: i128 = amount
             .checked_mul(fee_bps as i128)
-            .and_then(|scaled| scaled.checked_div(10_000))
             .unwrap_or_else(|| fail(&env, EscrowError::WithdrawFeeArithmeticOverflow));
+        let scaled_plus_accrual: i128 = scaled
+            .checked_add(accrual_remainder)
+            .unwrap_or_else(|| fail(&env, EscrowError::WithdrawFeeArithmeticOverflow));
+
+        let fee: i128 = scaled_plus_accrual.checked_div(10_000)
+            .unwrap_or_else(|| fail(&env, EscrowError::WithdrawFeeArithmeticOverflow));
+        let new_remainder: i128 = scaled_plus_accrual
+            .checked_rem(10_000)
+            .unwrap_or_else(|| fail(&env, EscrowError::WithdrawFeeArithmeticOverflow));
+
+        env.storage()
+            .instance()
+            .set(&DataKey::FeeAccrualRemainder, &new_remainder);
+
         let net: i128 = amount
             .checked_sub(fee)
             .unwrap_or_else(|| fail(&env, EscrowError::WithdrawNetArithmeticUnderflow));
@@ -9990,8 +10036,14 @@ impl StarfundEscrow {
             .get(&DataKey::DistributedPrincipal)
             .unwrap_or(0);
 
-        // Same formula as sweep_terminal_dust's liability floor, floored at zero.
-        let outstanding_liability = escrow.funded_amount.saturating_sub(distributed).max(0);
+        // In Settled status, liability includes yield coupon (settle_pool).
+        // In other statuses, liability is just the funded_amount.
+        let liability_base = if escrow.status == 2 {
+            escrow.settle_pool
+        } else {
+            escrow.funded_amount
+        };
+        let outstanding_liability = liability_base.saturating_sub(distributed).max(0);
 
         let token_addr = Self::funding_token_or_fail(&env);
         let this = env.current_contract_address();
