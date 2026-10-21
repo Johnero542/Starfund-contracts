@@ -1190,14 +1190,14 @@ fn fuzz_multi_investor_fund_ordering_snapshot_once_only() {
 //
 // Reference: docs/escrow-pro-rata.md
 //
-// Formula (floor / truncating integer division):
+// Formula (floor plus aggregate largest-remainder allocation):
 //   coupon      = total_principal × yield_bps / 10_000   (floor)
 //   settle_pool = total_principal + coupon
-//   payout_i    = contribution_i  × settle_pool / total_principal (floor)
+//   payout_i    = floor(contribution_i × settle_pool / total_principal) + remainder award
 //
 // Invariants tested:
 //   1. Σ payout_i ≤ settle_pool  (conservation — no over-distribution)
-//   2. settle_pool - Σ payout_i ≥ 0  (non-negative residue swept as dust)
+//   2. Σ payout_i ≤ floor-settle_pool + investor_count (minimum-coupon units)
 //   3. Non-participant returns 0
 //   4. ComputePayoutArithmeticOverflow on overflow inputs
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1251,7 +1251,7 @@ fn funded_and_settled_escrow<'a>(
     client
 }
 
-/// Property: sum of all computed payouts never exceeds settle_pool.
+/// Property: aggregate payouts stay within the floor-settle-pool plus minimum-coupon bound.
 /// Covers single investor, equal splits, and prime-denominator splits.
 proptest! {
     #[test]
@@ -1297,14 +1297,11 @@ proptest! {
             .map(|inv| client.compute_investor_payout(inv))
             .sum();
 
+        // Positive yields may add at most one minimum-coupon base unit per investor
+        // whose floor-rounded payout would otherwise equal principal.
         prop_assert!(
-            payout_sum <= expected_pool,
-            "sum of payouts ({payout_sum}) exceeded settle_pool ({expected_pool})"
-        );
-        let residue = expected_pool - payout_sum;
-        prop_assert!(
-            residue >= 0,
-            "residue must be non-negative, got {residue}"
+            payout_sum <= expected_pool + n_investors as i128,
+            "sum of payouts ({payout_sum}) exceeded settle_pool plus minimum-coupon bound ({expected_pool} + {n_investors})"
         );
     }
 }
@@ -1338,8 +1335,21 @@ fn payout_single_investor_equals_settle_pool() {
     assert!(payout >= contribution, "payout must include principal back");
 }
 
-/// Equal split: two investors each with the same contribution → payouts are equal
-/// and their sum ≤ settle_pool.
+#[test]
+fn positive_yield_payout_includes_minimum_base_unit() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let investor = Address::generate(&env);
+    let contribution = 1_000i128;
+    let client =
+        funded_and_settled_escrow(&env, "MINCOUP1", 1i64, &[(investor.clone(), contribution)]);
+
+    assert_eq!(client.compute_investor_payout(&investor), contribution + 1);
+    assert_eq!(client.get_settlement_pool(), contribution + 1);
+}
+
+/// Equal split: two investors each with the same contribution → payouts are equal.
 #[test]
 fn payout_equal_split_conservation() {
     let env = Env::default();
@@ -1364,9 +1374,10 @@ fn payout_equal_split_conservation() {
     let pb = client.compute_investor_payout(&inv_b);
 
     assert_eq!(pa, pb, "equal contributions must yield equal payouts");
-    assert!(pa + pb <= settle_pool, "sum must not exceed settle_pool");
-    let residue = settle_pool - pa - pb;
-    assert!(residue >= 0, "residue must be non-negative");
+    assert!(
+        pa + pb <= settle_pool + 2,
+        "sum exceeds minimum-coupon bound"
+    );
 }
 
 /// Zero yield: payout == contribution for every investor, sum == total_principal.
@@ -1426,10 +1437,9 @@ fn payout_max_yield_conservation() {
     let pb = client.compute_investor_payout(&inv_b);
 
     assert!(
-        pa + pb <= settle_pool,
-        "sum must not exceed settle_pool at max yield"
+        pa + pb <= settle_pool + 2,
+        "sum exceeds minimum-coupon bound at max yield"
     );
-    assert!(settle_pool - pa - pb >= 0, "residue non-negative");
 }
 
 /// Prime denominator: total_principal is a prime so most floor divisions produce a remainder.
@@ -1461,16 +1471,8 @@ fn payout_prime_denominator_residue_bounded() {
         .sum();
 
     assert!(
-        payout_sum <= settle_pool,
-        "prime denom: sum must not exceed settle_pool"
-    );
-    let residue = settle_pool - payout_sum;
-    assert!(residue >= 0, "residue must be non-negative");
-    // Residue is bounded by n_investors (each floor op drops at most 1 unit).
-    assert!(
-        residue < investors.len() as i128,
-        "residue {residue} must be < n_investors ({})",
-        investors.len()
+        payout_sum <= settle_pool + investors.len() as i128,
+        "prime denom: sum exceeds minimum-coupon bound"
     );
 }
 
@@ -1573,12 +1575,8 @@ fn fuzz_payout_conservation_multi_investor() {
             .sum();
 
         assert!(
-            payout_sum <= settle_pool,
-            "case {case_idx}: sum ({payout_sum}) > settle_pool ({settle_pool}), seed={case_seed}"
-        );
-        assert!(
-            settle_pool - payout_sum >= 0,
-            "case {case_idx}: residue negative, seed={case_seed}"
+            payout_sum <= settle_pool + n as i128,
+            "case {case_idx}: sum ({payout_sum}) > minimum-coupon bound ({settle_pool} + {n}), seed={case_seed}"
         );
     }
 }
@@ -1620,7 +1618,7 @@ fn cancelled_escrow<'a>(
     for (investor, amount) in contributions {
         client.fund(investor, amount);
     }
-    client.cancel_funding();
+    client.cancel_funding(&0u32);
     client
 }
 
@@ -1902,8 +1900,8 @@ proptest! {
             total_principal + coupon
         };
         prop_assert!(
-            payout_sum <= max_settle_pool,
-            "aggregate payout {payout_sum} exceeded max possible settle_pool {max_settle_pool}"
+            payout_sum <= max_settle_pool + n_investors as i128,
+            "aggregate payout {payout_sum} exceeded max settlement pool plus minimum-coupon bound"
         );
 
         // ── Bound 2: per-investor exact sum upper bound ──
@@ -1928,8 +1926,8 @@ proptest! {
             .sum();
 
         prop_assert!(
-            payout_sum <= exact_sum,
-            "aggregate payout {payout_sum} exceeded exact entitlement sum {exact_sum}"
+            payout_sum <= exact_sum + n_investors as i128,
+            "aggregate payout {payout_sum} exceeded exact entitlement plus minimum-coupon bound"
         );
 
         // ── Bound 3: each individual payout ≤ its own exact entitlement ──
@@ -1940,8 +1938,8 @@ proptest! {
             .collect();
         for (payout, exact) in payouts.iter().zip(exact_payouts.iter()) {
             prop_assert!(
-                payout <= exact,
-                "investor payout {payout} exceeded individual exact entitlement {exact}"
+                payout <= exact + 1,
+                "investor payout {payout} exceeded individual exact entitlement plus one base unit {exact}"
             );
         }
     }
@@ -1998,9 +1996,8 @@ fn payout_many_small_investors_conservation() {
 
     let n = 8usize;
     let investors: Vec<Address> = (0..n).map(|_| Address::generate(&env)).collect();
-    // Each contributes 1; total = 8, yield = 8% → settle_pool = 8 + 0 = 8 (floor of 8*800/10_000 = 0)
-    // Use a yield that produces a non-zero coupon: yield_bps=1250 → coupon = 8*1250/10_000 = 1
-    // settle_pool = 9; payout per investor = 1*9/8 = 1 (floor); sum = 8 ≤ 9.
+    // Each investor's pro-rata yield rounds to zero; the minimum-coupon rule gives
+    // each investor one additional base unit.
     let pairs: Vec<(Address, i128)> = investors
         .iter()
         .cloned()
@@ -2017,13 +2014,9 @@ fn payout_many_small_investors_conservation() {
         .map(|inv| client.compute_investor_payout(inv))
         .sum();
 
-    assert!(payout_sum <= settle_pool, "many-small: sum > settle_pool");
-    let residue = settle_pool - payout_sum;
-    assert!(residue >= 0);
-    assert!(
-        residue < n as i128,
-        "many-small: residue {residue} >= n_investors {n}"
-    );
+    assert_eq!(payout_sum, 2 * n as i128);
+    assert_eq!(client.get_settlement_pool(), payout_sum);
+    assert!(payout_sum <= settle_pool + n as i128);
 }
 
 /// Single large, single tiny: extreme asymmetry stress-test for rounding.
@@ -2471,7 +2464,7 @@ fn slots_lower_cap_mid_sequence_invariant() {
     assert_eq!(remaining_before_lower, 3, "6 - 3 = 3 remaining slots");
 
     // Lower cap to exactly count (minimum valid lower: 3).
-    client.lower_max_unique_investors(&3u32);
+    client.lower_max_unique_investors(&3u32, &client.get_admin_nonce());
     assert_slots_invariant(&client, "after lower_cap to 3");
 
     let cap_after_lower = client.get_max_unique_investors_cap().unwrap();
@@ -2488,8 +2481,8 @@ fn slots_lower_cap_mid_sequence_invariant() {
     // Further lower to mid-range (cap = 5, count stays 3).
     // First reset cap to 6, then lower to 5.
     // Actually raise it back then lower again to test a partial lowering.
-    client.raise_max_unique_investors(&6u32);
-    client.lower_max_unique_investors(&5u32);
+    client.raise_max_unique_investors(&6u32, &client.get_admin_nonce());
+    client.lower_max_unique_investors(&5u32, &client.get_admin_nonce());
     assert_slots_invariant(&client, "after raise then lower to 5");
 
     let remaining_at_5 = client.get_remaining_investor_slots().unwrap();
@@ -2771,7 +2764,10 @@ proptest! {
                         rng.gen_usize(2) as u32 + 1
                     );
                     if target_cap >= count && target_cap >= 1 && target_cap < current_cap {
-                        client.lower_max_unique_investors(&target_cap);
+                        client.lower_max_unique_investors(
+                            &target_cap,
+                            &client.get_admin_nonce(),
+                        );
                         current_cap = target_cap;
                     }
 
