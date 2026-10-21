@@ -788,7 +788,7 @@ arises when off-chain tooling re-derives the formula from raw snapshot fields.
 **Storage keys:** `DataKey::FundingCloseSnapshot`, `DataKey::Escrow`, `DataKey::InvestorIndex`,
 `DataKey::InvestorContribution`, `DataKey::InvestorEffectiveYield`
 
-#### Formula (floor / truncating integer division)
+#### Formula (floor plus largest-remainder allocation)
 
 ```text
 settle_pool_i = total_principal + total_principal × effective_yield_bps_i / 10_000  (floor)
@@ -806,12 +806,13 @@ Where `total_principal` is from `DataKey::FundingCloseSnapshot`, `contribution_i
 `DataKey::InvestorContribution`, and `effective_yield_bps_i` is the investor's tiered yield
 (`DataKey::InvestorEffectiveYield`) or the escrow base yield (`InvoiceEscrow::yield_bps`).
 
+Fractional remainders are ranked by size; equal remainders are resolved by `InvestorIndex`
+funding order. The settlement pool is the total rational liability rounded down once.
+
 #### Yield note
 
-The pool is **tier-weighted**, not base-yield. `settle()` still reports the base-yield figure
-(`funded_amount + floor(funded_amount × yield_bps / 10_000)`) in `SettlementResult` /
-`EscrowSettled`; that value is a **lower bound** on the real liability for mixed-tier escrows
-and is informational only. Repayment tooling must use this view.
+The pool is **tier-weighted**, not base-yield. `settle()` reports this same aggregate liability
+in `SettlementResult` / `EscrowSettled` and verifies that the escrow holds enough funding tokens.
 
 #### Return values
 
@@ -835,8 +836,8 @@ All multiplications use `i128::checked_mul`; divisions and the running sum use
 #### Rounding invariant
 
 `get_settlement_pool()` is the **exact** sum of all per-investor `compute_investor_payout`
-values, so the pool is never under-funded for tiered claims. Any sub-unit residue between
-`settle()`'s base-yield pool and this figure is reclaimed by `sweep_terminal_dust`.
+values, with the aggregate fractional remainders assigned by largest remainder and funding-order
+tie-break. `settle()` reports and checks this same liability.
 
 #### Authorization
 

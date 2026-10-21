@@ -1190,10 +1190,10 @@ fn fuzz_multi_investor_fund_ordering_snapshot_once_only() {
 //
 // Reference: docs/escrow-pro-rata.md
 //
-// Formula (floor / truncating integer division):
+// Formula (floor plus aggregate largest-remainder allocation):
 //   coupon      = total_principal × yield_bps / 10_000   (floor)
 //   settle_pool = total_principal + coupon
-//   payout_i    = contribution_i  × settle_pool / total_principal (floor)
+//   payout_i    = floor(contribution_i × settle_pool / total_principal) + remainder award
 //
 // Invariants tested:
 //   1. Σ payout_i ≤ settle_pool  (conservation — no over-distribution)

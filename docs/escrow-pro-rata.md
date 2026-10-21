@@ -32,7 +32,7 @@ nominal floor-rounded pool by at most one base unit per investor. Use
 **Calculation:**
 1.  **Pro-rata Share**: $1,000 / 10,050 \approx 0.09950248756...$
 2.  **Gross Payout**: $0.09950248756 * 10,550 = 1,049.75124378...$
-3.  **Final Payout (USDC base units)**: `1,049.75` (assuming 2 decimals) or `104,975,124` (assuming 7 decimals, rounded down).
+3.  **Final Payout**: the base-unit floor, plus one unit only if this investor's fractional remainder is among the largest remainders selected for aggregate allocation.
 
 ## ⚠️ Security Notes
 
@@ -149,17 +149,17 @@ and after every individual payout call and asserts identity.
 
 | Test | Coverage |
 |------|----------|
-| `prop_payout_sum_le_settle_pool` | Uniform yield, 2–6 investors, arbitrary amounts & yield |
+| `prop_payout_sum_le_settle_pool` | Uniform yield, 2–6 investors, arbitrary amounts & yield; exact pool conservation |
 | `prop_aggregate_payout_le_settle_pool_tiered` | Tiered/mixed yield, snapshot consistency, max-pool bound |
 | `payout_single_investor_equals_settle_pool` | Single investor receives exact `settle_pool` |
 | `payout_equal_split_conservation` | Equal contributions, minimum-coupon aggregate bound |
 | `payout_zero_yield_returns_principal_only` | Zero yield: `payout_i == contribution_i` |
 | `payout_max_yield_conservation` | 100% yield: conservation still holds |
-| `payout_prime_denominator_residue_bounded` | Prime total → residue < `n_investors` |
+| `payout_prime_denominator_residue_bounded` | Prime total, largest-remainder conservation |
 | `payout_highly_skewed_contributions` | 99%/1% split; residue bounded |
 | `payout_many_small_investors_conservation` | 8 investors × 1 unit; minimum coupon per investor |
 | `payout_single_large_single_tiny` | Extreme asymmetry stress test |
-| `payout_tiered_mixed_yield_conservation` | 3-tier mixed yield; per-investor & aggregate bounds |
+| `payout_tiered_mixed_yield_conservation` | 3-tier mixed yield; per-investor & exact aggregate allocation |
 | `snapshot_denominator_consistent_across_all_payout_reads` | Snapshot immutable across all reads |
 | `fuzz_payout_conservation_multi_investor` | 64-case fuzz, 1–8 investors, full yield range |
 
@@ -197,42 +197,39 @@ entirely on-chain by enumerating the recorded investor set ([`DataKey::InvestorI
 summing each investor's own effective-yield payout:
 
 ```text
-settle_pool_i = total_principal + total_principal × effective_yield_bps_i / 10_000
-payout_i      = contribution_i × settle_pool_i / total_principal   (floor)
+settle_pool_i = total_principal + floor(total_principal × effective_yield_bps_i / 10_000)
+base_i        = floor(contribution_i × settle_pool_i / total_principal)
+payout_i      = base_i + largest_remainder_adjustment_i
 
 get_settlement_pool() = Σ_i payout_i
 ```
 
-Each term is byte-for-byte the same floored integer `compute_investor_payout` returns, so the
-aggregate **cannot under-fund** any claim, no matter how the tiers are distributed.
+The per-investor base amounts are floored, then `floor(sum(remainder_i) / total_principal)`
+additional base units are distributed to the largest remainders (funding order breaks ties).
+Therefore the sum exactly matches the aggregate liability rounded down once.
 
 ### Why this view exists
 
-`compute_investor_payout` derives a *per-investor* share. SME repayment tooling and
-dashboards previously had to re-derive `total_principal × yield_bps / 10_000` off-chain,
-risking a rounding divergence from the on-chain math. `get_settlement_pool` closes that gap
-by exposing the authoritative aggregate in a single host invocation.
+`compute_investor_payout` derives a per-investor share, including any allocated remainder.
+SME repayment tooling and dashboards can use `get_settlement_pool` to read the authoritative
+aggregate in a single host invocation.
 
 ### Yield note: base-yield pool vs. tier-weighted pool
 
-`settle()` still computes its `settle_pool` (in both the `SettlementResult` return value and
-the `EscrowSettled` event payload) from the escrow **base yield** only:
+`settle()` computes its `settle_pool` in both `SettlementResult` and `EscrowSettled` from the
+aggregate investor liability:
 
 ```text
-settle_pool = funded_amount + floor(funded_amount × yield_bps / 10_000)
+settle_pool = get_settlement_pool()
 ```
 
-That value is **informational**. For an escrow whose investors sit at different tiers it is a
-**lower bound** on the real liability. Repayment tooling must use `get_settlement_pool()` —
-never the `settle` return value — to determine how much the SME owes.
-
-When every investor shares the same effective yield, the two agree exactly (up to the
-sub-unit floor residue that `sweep_terminal_dust` reclaims).
+For uniform yield this equals the standard base-yield pool. For mixed tiers it includes each
+investor's selected yield, and `settle()` verifies the contract balance covers the amount.
 
 ### Cost
 
 O(n) over [`DataKey::InvestorIndex`], which is hard-capped at `MAX_UNIQUE_INVESTORS` (10 000)
-by `fund_impl`. This is a read-only view and is not on the release path.
+by `fund_impl`. Both `settle()` and individual payout reads use this bounded calculation.
 
 ### Return value
 

@@ -51,6 +51,11 @@ pub(crate) fn investor_claim_not_before(investor: Address) -> DataKey {
     DataKey::InvestorClaimNotBefore(investor)
 }
 
+/// Per-investor original lock duration selected on the first funding call.
+pub(crate) fn investor_committed_lock_secs(investor: Address) -> DataKey {
+    DataKey::InvestorCommittedLockSecs(investor)
+}
+
 /// Per-investor persistent claimed-payout marker.
 pub(crate) fn investor_claimed(investor: Address) -> DataKey {
     DataKey::InvestorClaimed(investor)

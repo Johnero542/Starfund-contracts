@@ -566,6 +566,7 @@ pub(crate) fn extend_ttl_for_activity(
             DataKey::InvestorTotalDeposited(addr.clone()),
             DataKey::InvestorEffectiveYield(addr.clone()),
             DataKey::InvestorClaimNotBefore(addr.clone()),
+            keys::investor_committed_lock_secs(addr.clone()),
             DataKey::InvestorClaimed(addr.clone()),
             DataKey::InvestorRefunded(addr.clone()),
             DataKey::InvestorAllowlisted(addr),
@@ -2087,6 +2088,28 @@ pub struct SettlementResult {
     pub settled_at: u64,
 }
 
+/// Per-escrow outcome returned by [`StarfundEscrow::settle_batch`].
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SettlementBatchStatus {
+    /// Settlement completed successfully.
+    Settled,
+    /// The escrow call failed with this contract error code.
+    FailedContract(u32),
+    /// The call failed for a non-contract reason, such as a missing contract or return decoding.
+    FailedInvocation,
+}
+
+/// Result for one address passed to [`StarfundEscrow::settle_batch`].
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SettlementBatchOutcome {
+    /// Escrow contract address that was attempted.
+    pub escrow: Address,
+    /// Whether settlement succeeded, or the reason it failed.
+    pub status: SettlementBatchStatus,
+}
+
 /// Read-only snapshot of all settlement-relevant configuration.
 ///
 /// Returned by [`StarfundEscrow::get_settlement_config`]. Every field is read from
@@ -2409,6 +2432,8 @@ pub struct EscrowPartialSettle {
     #[topic]
     pub invoice_id: Symbol,
     pub funded_amount: i128,
+    /// Ledger timestamp when early funding closure was recorded.
+    pub partial_settled_at_ledger_timestamp: u64,
 }
 
 /// Emitted exactly once when the escrow transitions from **open** (status 0) to **funded**
@@ -4679,6 +4704,23 @@ impl StarfundEscrow {
             .set(&keys::investor_claim_not_before(investor), &value);
     }
 
+    fn get_persistent_investor_committed_lock_secs(env: &Env, investor: Address) -> u64 {
+        env.storage()
+            .persistent()
+            .get(&keys::investor_committed_lock_secs(investor))
+            .unwrap_or(0)
+    }
+
+    fn set_persistent_investor_committed_lock_secs(
+        env: &Env,
+        investor: Address,
+        value: u64,
+    ) {
+        env.storage()
+            .persistent()
+            .set(&keys::investor_committed_lock_secs(investor), &value);
+    }
+
     fn remove_investor_from_index(env: &Env, investor: &Address) -> bool {
         let mut index: Vec<Address> = env
             .storage()
@@ -4710,6 +4752,9 @@ impl StarfundEscrow {
         env.storage()
             .persistent()
             .remove(&keys::investor_claim_not_before(investor.clone()));
+        env.storage()
+            .persistent()
+            .remove(&keys::investor_committed_lock_secs(investor));
     }
 
     fn get_persistent_investor_claimed(env: &Env, investor: Address) -> bool {
@@ -4909,6 +4954,12 @@ impl StarfundEscrow {
         env.storage().instance().get(&DataKey::SettledAt)
     }
 
+    /// Returns the ledger timestamp at which `partial_settle` closed funding, or [`None`]
+    /// when funding was not closed through that entrypoint.
+    pub fn get_partial_settled_at(env: Env) -> Option<u64> {
+        env.storage().instance().get(&DataKey::PartialSettledAt)
+    }
+
     /// Effective yield (bps) for this investor after their **first** deposit; later [`StarfundEscrow::fund`]
     /// calls add principal at this rate. Defaults to [`InvoiceEscrow::yield_bps`] when unset (legacy positions).
     ///
@@ -4924,6 +4975,12 @@ impl StarfundEscrow {
     /// Earliest ledger timestamp for [`StarfundEscrow::claim_investor_payout`]; `0` if not gated.
     pub fn get_investor_claim_not_before(env: Env, investor: Address) -> u64 {
         Self::get_persistent_investor_claim_not_before(&env, investor)
+    }
+
+    /// Original lock duration in seconds recorded on the investor's first deposit.
+    /// Returns `0` for simple-fund and legacy positions without a stored commitment.
+    pub fn get_investor_commitment_lock_secs(env: Env, investor: Address) -> u64 {
+        Self::get_persistent_investor_committed_lock_secs(&env, investor)
     }
     /// Returns the yield-tier table configured at `init`.
     /// Returns an empty `Vec` when no tiers were configured.
@@ -7396,23 +7453,28 @@ impl StarfundEscrow {
 
         let resolution: YieldResolution;
         let mut claim_nb = 0u64;
+        let mut recorded_lock_secs = 0u64;
 
         if simple_fund {
-            resolution = if prev == 0 {
-                YieldResolution {
+            if prev == 0 {
+                resolution = YieldResolution {
                     effective_yield_bps: escrow.yield_bps,
                     matched_lock_secs: 0,
-                }
+                };
             } else {
-                YieldResolution {
+                resolution = YieldResolution {
                     effective_yield_bps: Self::get_persistent_investor_effective_yield(
                         &env,
                         investor.clone(),
                     )
                     .unwrap_or(escrow.yield_bps),
                     matched_lock_secs: 0,
-                }
-            };
+                };
+                claim_nb =
+                    Self::get_persistent_investor_claim_not_before(&env, investor.clone());
+                recorded_lock_secs =
+                    Self::get_persistent_investor_committed_lock_secs(&env, investor.clone());
+            }
         } else {
             ensure(&env, prev == 0, EscrowError::TieredSecondDeposit);
             resolution =
@@ -7471,6 +7533,11 @@ impl StarfundEscrow {
             investor_effective_yield_bps,
         );
         Self::set_persistent_investor_claim_not_before(&env, investor.clone(), claim_nb);
+        Self::set_persistent_investor_committed_lock_secs(
+            &env,
+            investor.clone(),
+            recorded_lock_secs,
+        );
 
         if prev == 0 {
             let already_present = Self::remove_investor_from_index(&env, &investor);
@@ -7573,6 +7640,8 @@ impl StarfundEscrow {
             EscrowError::PartialSettleNoFunds,
         );
 
+        let now = env.ledger().timestamp();
+
         // Transition to funded status early.
         escrow.status = 1;
 
@@ -7594,11 +7663,15 @@ impl StarfundEscrow {
         }
 
         env.storage().instance().set(&DataKey::Escrow, &escrow);
+        env.storage()
+            .instance()
+            .set(&DataKey::PartialSettledAt, &now);
 
         EscrowPartialSettle {
             name: symbol_short!("part_set"),
             invoice_id: escrow.invoice_id.clone(),
             funded_amount: escrow.funded_amount,
+            partial_settled_at_ledger_timestamp: now,
         }
         .publish(&env);
 
@@ -7703,10 +7776,10 @@ impl StarfundEscrow {
 
     /// Batch settle entrypoint: settle multiple escrows in a single call.
     ///
-    /// Each address is processed sequentially. All existing [`StarfundEscrow::settle`]
-    /// invariants (pause gate, legal hold, funded status, maturity check, and the
-    /// once-only [`EscrowError::EscrowAlreadySettled`] guard) are enforced per entry. The
-    /// entire batch is atomic: if any escrow fails to settle, the entire call reverts.
+    /// Each address is processed sequentially and independently. All existing
+    /// [`StarfundEscrow::settle`] invariants (pause gate, legal hold, funded status, maturity
+    /// check, and the once-only [`EscrowError::EscrowAlreadySettled`] guard) are enforced per
+    /// entry. A failure does not revert successful settlements for other addresses.
     ///
     /// # Parameters
     /// - `escrows`: `Vec<Address>` of escrow contract addresses to settle.
@@ -7715,13 +7788,14 @@ impl StarfundEscrow {
     /// - [`EscrowError::SettlementBatchEmpty`] if `escrows` is empty
     /// - [`EscrowError::SettlementBatchTooLarge`] if `escrows.len() > [`MAX_SETTLE_BATCH`]
     ///
-    /// Per-entry errors (not funded, maturity not reached, legal hold, paused, auth failure)
-    /// terminate the entire batch atomically.
+    /// Per-entry failures are reported in the returned vector as
+    /// [`SettlementBatchStatus::FailedContract`] or
+    /// [`SettlementBatchStatus::FailedInvocation`]; they do not abort the batch.
     ///
     /// # Events
     /// One [`EscrowSettled`] per successfully settled escrow (emitted by each target escrow's
     /// [`StarfundEscrow::settle`] call).
-    pub fn settle_batch(env: Env, escrows: Vec<Address>) {
+    pub fn settle_batch(env: Env, escrows: Vec<Address>) -> Vec<SettlementBatchOutcome> {
         let n = escrows.len();
         ensure(&env, n > 0, EscrowError::SettlementBatchEmpty);
         ensure(
@@ -7730,11 +7804,26 @@ impl StarfundEscrow {
             EscrowError::SettlementBatchTooLarge,
         );
 
+        let mut outcomes = Vec::new(&env);
         for i in 0..n {
             let escrow_addr = escrows.get(i).unwrap();
-            let client = StarfundEscrowClient::new(&env, &escrow_addr);
-            client.settle();
+            let status = match env.try_invoke_contract::<SettlementResult>(
+                &escrow_addr,
+                &symbol_short!("settle"),
+                (),
+            ) {
+                Ok(Ok(_)) => SettlementBatchStatus::Settled,
+                Err(Err(soroban_sdk::InvokeError::Contract(code))) => {
+                    SettlementBatchStatus::FailedContract(code)
+                }
+                _ => SettlementBatchStatus::FailedInvocation,
+            };
+            outcomes.push_back(SettlementBatchOutcome {
+                escrow: escrow_addr,
+                status,
+            });
         }
+        outcomes
     }
 
     /// Admin releases funds to the SME up to the remaining obligation, net of the immutable protocol fee.
@@ -8126,6 +8215,8 @@ impl StarfundEscrow {
             investor: payout_investor.clone(),
             invoice_id: escrow.invoice_id.clone(),
             payout,
+            effective_yield_bps,
+            commitment_lock_secs,
         }
         .publish(&env);
 
@@ -8188,7 +8279,7 @@ impl StarfundEscrow {
     /// of the math specified in `docs/escrow-pro-rata.md`. Off-chain tooling should call this
     /// view rather than re-implementing the formula to guarantee identical rounding.
     ///
-    /// # Formula (floor / truncating integer division)
+    /// # Formula and rounding allocation
     ///
     /// ```text
     /// coupon       = total_principal × effective_yield_bps / 10_000  (floor)
@@ -8234,6 +8325,40 @@ impl StarfundEscrow {
     /// # Authorization
     ///
     /// None — pure read; no auth required.
+    fn investor_payout_floor_and_remainder(
+        env: &Env,
+        investor: Address,
+        total_principal: i128,
+        base_yield_bps: i64,
+    ) -> (i128, i128) {
+        let contribution = Self::get_persistent_investor_contribution(env, investor.clone());
+        if contribution <= 0 {
+            return (0, 0);
+        }
+
+        let effective_yield_bps =
+            Self::get_persistent_investor_effective_yield(env, investor).unwrap_or(base_yield_bps);
+        let coupon = total_principal
+            .checked_mul(effective_yield_bps as i128)
+            .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow))
+            .checked_div(10_000)
+            .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow));
+        let investor_pool = total_principal
+            .checked_add(coupon)
+            .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow));
+        let numerator = contribution
+            .checked_mul(investor_pool)
+            .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow));
+        (
+            numerator
+                .checked_div(total_principal)
+                .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow)),
+            numerator
+                .checked_rem(total_principal)
+                .unwrap_or_else(|| fail(env, EscrowError::ComputePayoutArithmeticOverflow)),
+        )
+    }
+
     pub fn compute_investor_payout(env: Env, investor: Address) -> i128 {
         // Contribution fetch: returns 0 for non-participants without panicking.
         let contribution: i128 = Self::get_persistent_investor_contribution(&env, investor.clone());
@@ -8256,7 +8381,6 @@ impl StarfundEscrow {
         }
 
         // Resolve effective yield: investor-specific tier (set at first deposit) or escrow base.
-        // env.clone(): env is used again after this call for InvestorEffectiveYield read.
         let escrow = Self::get_escrow(env.clone());
         let effective_yield_bps: i64 =
             Self::get_persistent_investor_effective_yield(&env, investor.clone())
@@ -8274,36 +8398,31 @@ impl StarfundEscrow {
     /// is the exact amount the SME must repay for the contract to remain solvent through the
     /// last [`StarfundEscrow::claim_investor_payout`] call.
     ///
-    /// Solvency invariant (issue #94):
+    /// Solvency invariant:
     ///
     /// ```text
-    /// get_settlement_pool() = Σ_i floor(contribution_i × settle_pool_i / total_principal)
-    /// Σ_i claimable payout_i ≤ get_settlement_pool()
+    /// get_settlement_pool() = Σ_i base_payout_i + floor(Σ_i remainder_i / total_principal)
+    /// Σ_i compute_investor_payout(i) = get_settlement_pool()
     /// ```
     ///
-    /// The sum is exact (each term is the very same floored integer
-    /// [`StarfundEscrow::compute_investor_payout`] returns), so the pool can never be
-    /// under-funded for tiered escrows.
+    /// The sum is the total rational liability rounded down once, with aggregate remainder units
+    /// assigned by descending remainder and funding order as the tie-break.
     ///
     /// # Rounding
     ///
-    /// Every term uses truncating (floor) integer division, identical to the per-investor
-    /// formula:
+    /// Each investor starts with a truncating floor payout; the aggregate remainder is then
+    /// assigned to the largest fractional remainders:
     ///
     /// ```text
     /// settle_pool_i = total_principal + floor(total_principal × effective_yield_bps_i / 10_000)
-    /// payout_i      = contribution_i × settle_pool_i / total_principal   (floor)
+    /// base_i        = floor(contribution_i × settle_pool_i / total_principal)
+    /// payout_i      = base_i + largest_remainder_adjustment_i
     /// ```
     ///
     /// # Base-yield pool vs. tier-weighted pool
     ///
-    /// [`StarfundEscrow::settle`] still reports a **base-yield** `settle_pool` in its
-    /// [`SettlementResult`] / [`EscrowSettled`] payload
-    /// (`funded_amount + floor(funded_amount × yield_bps / 10_000)`), computed without
-    /// enumerating investors. That figure is informational only; for an escrow whose investors
-    /// sit at mixed yield tiers it is a **lower bound** on the real liability. Off-chain
-    /// repayment tooling must use this view, not the `settle` return value, to determine how
-    /// much the SME owes.
+    /// [`StarfundEscrow::settle`] reports and checks this exact tier-weighted liability in its
+    /// [`SettlementResult`] / [`EscrowSettled`] payload.
     ///
     /// # Returns
     ///
@@ -8311,13 +8430,13 @@ impl StarfundEscrow {
     /// - `0` when `total_principal <= 0` (degenerate snapshot).
     /// - The base-yield pool when no investor is recorded in [`DataKey::InvestorIndex`]
     ///   (defensive fallback; a funded escrow always records at least one investor).
-    /// - The sum of all per-investor gross payouts otherwise.
+    /// - The aggregate liability rounded down once, otherwise.
     ///
     /// # Cost
     ///
     /// O(n) over [`DataKey::InvestorIndex`], which is hard-capped at
-    /// [`MAX_UNIQUE_INVESTORS`] by [`StarfundEscrow::fund_impl`]. This is a read-only view and
-    /// is not on the release path measured by `release_budget_tests`.
+    /// [`MAX_UNIQUE_INVESTORS`] by [`StarfundEscrow::fund_impl`]. Both settlement and individual
+    /// payout reads use this O(n) bounded calculation.
     ///
     /// # Overflow safety
     ///
@@ -8373,9 +8492,8 @@ impl StarfundEscrow {
                 .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow));
         }
 
-        // Σ payout_i, term-by-term identical to compute_investor_payout so the aggregate
-        // can never under-fund the last claimant.
-        let mut total_liability: i128 = 0;
+        let mut total_base_payouts: i128 = 0;
+        let mut total_remainders: i128 = 0;
         for i in 0..index.len() {
             let investor = index.get(i).unwrap();
 
@@ -8399,7 +8517,9 @@ impl StarfundEscrow {
                 .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow));
         }
 
-        total_liability
+        total_base_payouts
+            .checked_add(total_remainders / total_principal)
+            .unwrap_or_else(|| fail(&env, EscrowError::ComputePayoutArithmeticOverflow))
     }
 
     /// Admin-only setter for the invoice maturity timestamp.

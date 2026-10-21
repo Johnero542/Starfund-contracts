@@ -3490,6 +3490,7 @@ fn test_commitment_claim_lock_preserved_after_follow_on_fund() {
     let yield_after_first = client.get_investor_yield_bps(&inv);
 
     let lock_after_first = client.get_investor_claim_not_before(&inv);
+    let duration_after_first = client.get_investor_commitment_lock_secs(&inv);
 
     assert_eq!(yield_after_first, 950, "tier yield not selected correctly");
 
@@ -3497,6 +3498,7 @@ fn test_commitment_claim_lock_preserved_after_follow_on_fund() {
         lock_after_first, 1_000_100u64,
         "claim lock not set correctly"
     );
+    assert_eq!(duration_after_first, 100u64);
 
     // Follow-on deposit using fund() — must succeed and preserve both values.
 
@@ -3512,6 +3514,11 @@ fn test_commitment_claim_lock_preserved_after_follow_on_fund() {
         client.get_investor_claim_not_before(&inv),
         lock_after_first,
         "InvestorClaimNotBefore must be immutable after follow-on fund()"
+    );
+    assert_eq!(
+        client.get_investor_commitment_lock_secs(&inv),
+        duration_after_first,
+        "original commitment duration must be immutable after follow-on fund()"
     );
 }
 
