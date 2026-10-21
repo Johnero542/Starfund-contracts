@@ -71,6 +71,7 @@ The current contract defines 22 event structs.
 | `FeeScheduleActivated` | `fee_act` | `activate_fee_schedule` |
 | `FundingCancelled` | `fund_can` | `cancel_funding` |
 | `InvestorRefundedEvt` | `refunded` | `refund` |
+| `EscrowUnfunded` | `unfund` | `unfund` |
 | `TreasuryDustSwept` | `dust_sw` | `sweep_terminal_dust` |
 | `PrimaryAttestationBound` | `att_bind` | `bind_primary_attestation_hash` |
 | `AttestationDigestAppended` | `att_app` | `append_attestation_digest` |
@@ -450,6 +451,28 @@ Data:
 | Field | Type |
 |---|---|
 | `amount` | `i128` |
+
+### `EscrowUnfunded`
+
+Emitted after successful `unfund`.
+
+Topics:
+
+| Index | Field | Type | Value |
+|---:|---|---|---|
+| 0 | fixed event topic | `Symbol` | `escrow_unfunded` |
+| 1 | `name` | `Symbol` | `unfund` |
+| 2 | `investor` | `Address` | Investor withdrawing principal |
+| 3 | `invoice_id` | `Symbol` | Escrow invoice id |
+
+Data:
+
+| Field | Type |
+|---|---|
+| `amount` | `i128` |
+| `remaining_contribution` | `i128` |
+| `new_funded_amount` | `i128` |
+| `timestamp` | `u64` |
 
 ### `TreasuryDustSwept`
 

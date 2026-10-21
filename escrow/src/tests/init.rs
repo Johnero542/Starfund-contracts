@@ -43,31 +43,126 @@ fn test_init_stores_escrow() {
 }
 
 #[test]
-fn test_init_rejects_duplicate_role_addresses() {
+fn test_init_rejects_min_contribution_above_max_per_investor() {
     let env = Env::default();
     env.mock_all_auths();
     let client = deploy(&env);
-    let admin = Address::generate(&env);
-    let sme = Address::generate(&env);
-    let treasury = Address::generate(&env);
-    let funding_token = Address::generate(&env);
 
-    for (admin_arg, sme_arg, treasury_arg) in [
-        (&admin, &admin, &treasury),
-        (&admin, &sme, &admin),
-        (&admin, &sme, &sme),
-    ] {
+    assert_contract_error(
+        client.try_init(
+            &Address::generate(&env),
+            &soroban_sdk::String::from_str(&env, "INIT-FLOOR-CAP"),
+            &Address::generate(&env),
+            &10_000i128,
+            &800i64,
+            &0u64,
+            &Address::generate(&env),
+            &None,
+            &Address::generate(&env),
+            &None,
+            &Some(5_000i128),
+            &None,
+            &Some(1_000i128),
+            &None,
+            &None,
+            &None,
+            &None,
+            &None::<i64>,
+            &None::<u32>,
+        ),
+        EscrowError::MinContributionExceedsMaxPerInvestor,
+    );
+
+    client.init(
+        &Address::generate(&env),
+        &soroban_sdk::String::from_str(&env, "INIT-FLOOR-CAP-EQ"),
+        &Address::generate(&env),
+        &10_000i128,
+        &800i64,
+        &0u64,
+        &Address::generate(&env),
+        &None,
+        &Address::generate(&env),
+        &None,
+        &Some(1_000i128),
+        &None,
+        &Some(1_000i128),
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+}
+
+#[test]
+fn test_init_rejects_max_per_investor_above_amount() {
+    for max_per_investor in [1_001i128, i128::MAX] {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = deploy(&env);
+
         assert_contract_error(
             client.try_init(
-                admin_arg,
-                &soroban_sdk::String::from_str(&env, "ROLE01"),
-                sme_arg,
-                &TARGET,
+                &Address::generate(&env),
+                &soroban_sdk::String::from_str(&env, "INIT-CAP"),
+                &Address::generate(&env),
+                &1_000i128,
                 &800i64,
                 &0u64,
-                &funding_token,
+                &Address::generate(&env),
                 &None,
-                treasury_arg,
+                &Address::generate(&env),
+                &None,
+                &None,
+                &None,
+                &Some(max_per_investor),
+                &None,
+                &None,
+                &None,
+                &None,
+                &None::<i64>,
+                &None::<u32>,
+            ),
+            EscrowError::MaxPerInvestorExceedsAmount,
+        );
+    }
+}
+
+#[test]
+fn test_init_rejects_contract_address_as_token_or_recipient() {
+    for self_address_field in 0..3 {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_address, client) = deploy_with_id(&env);
+        let token = if self_address_field == 0 {
+            contract_address.clone()
+        } else {
+            Address::generate(&env)
+        };
+        let sme = if self_address_field == 1 {
+            contract_address.clone()
+        } else {
+            Address::generate(&env)
+        };
+        let treasury = if self_address_field == 2 {
+            contract_address
+        } else {
+            Address::generate(&env)
+        };
+
+        assert_contract_error(
+            client.try_init(
+                &Address::generate(&env),
+                &soroban_sdk::String::from_str(&env, "INIT-SELF"),
+                &sme,
+                &1_000i128,
+                &800i64,
+                &0u64,
+                &token,
+                &None,
+                &treasury,
                 &None,
                 &None,
                 &None,
@@ -79,7 +174,7 @@ fn test_init_rejects_duplicate_role_addresses() {
                 &None::<i64>,
                 &None::<u32>,
             ),
-            EscrowError::RoleAddressesMustBeDistinct,
+            EscrowError::InitAddressIsContract,
         );
     }
 }

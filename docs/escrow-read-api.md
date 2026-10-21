@@ -46,6 +46,7 @@ re-implementing storage reads to guarantee identical semantics.
 
 **Per-Investor State:**
 - [get_contribution](#get_contributioninvestor-address--i128)
+- [get_total_deposited](#get_total_depositedinvestor-address--i128)
 - [get_unique_funder_count](#get_unique_funder_count--u32)
 - [get_investor_yield_bps](#get_investor_yield_bpsinvestor-address--i64)
 - [get_investor_claim_not_before](#get_investor_claim_not_beforeinvestor-address--u64)
@@ -580,11 +581,29 @@ and the internal `effective_yield_for_commitment` helper.
 **Storage key:** `DataKey::InvestorContribution(investor)` (persistent)  
 **Signature:** `pub fn get_contribution(env: Env, investor: Address) -> i128`
 
-Returns the cumulative principal contributed by `investor` in token base units.
+Returns the current net principal contributed by `investor` in token base units. Successful
+unfunds and refunds reduce this amount.
 
 **Requires initialization:** No  
 **Default when absent:** `0` (never contributed)  
 **Storage type:** Persistent (independent TTL per address; see ADR-007)
+
+---
+
+### `get_total_deposited(investor: Address) → i128`
+
+**Storage key:** `DataKey::InvestorTotalDeposited(investor)` (persistent)
+**Signature:** `pub fn get_total_deposited(env: Env, investor: Address) -> i128`
+
+Returns the gross sum of successful deposits made by `investor`. Unfunds, refunds, and
+withdrawals do not reduce this value.
+
+**Requires initialization:** No
+**Default when absent:** current `get_contribution(investor)` value
+**Storage type:** Persistent (independent TTL per address; see ADR-007)
+
+For positions stored before this key was introduced, the current contribution is the
+best available lower bound; earlier unfunds cannot be reconstructed on-chain.
 
 ---
 
@@ -606,13 +625,15 @@ return `0`, matching `get_contribution`.
 
 ### `get_unique_funder_count() → u32`
 
-**Storage key:** `DataKey::UniqueFunderCount`  
+**Derived from:** active non-zero contributions in `DataKey::InvestorIndex`
 **Signature:** `pub fn get_unique_funder_count(env: Env) -> u32`
 
-Returns the count of distinct investor addresses with non-zero contributions. Initialized to `0` at `init`.
+Returns the count of listed investor addresses whose current contribution is non-zero. The
+cached `DataKey::UniqueFunderCount` is not trusted by this view, so stale cache values do not
+affect the result.
 
-**Requires initialization:** No (but written as `0` at `init`)  
-**Default when absent:** `0`
+**Requires initialization:** No
+**Default when the investor index is absent:** `0`
 
 **Notes:** counts distinct chain accounts, not real-world persons (Sybil resistance is not a goal of this counter).
 

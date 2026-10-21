@@ -3758,7 +3758,7 @@ fn update_yield_bps_fails_when_cancelled() {
     let env = Env::default();
     let (client, _admin) = setup_yield_bps_test(&env, "YLD_ST_03", 800);
 
-    client.cancel_funding();
+    client.cancel_funding(&0u32);
     assert_eq!(client.get_escrow().status, 4u32);
 
     assert_contract_error(
