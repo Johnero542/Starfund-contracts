@@ -223,6 +223,28 @@ fn test_unknown_investor_contribution_is_zero() {
 }
 
 #[test]
+fn test_get_contributions_enforces_bounded_batch_size() {
+    let env = Env::default();
+    let client = deploy(&env);
+    let mut max_batch = SorobanVec::new(&env);
+    for _ in 0..crate::MAX_INVESTOR_READ_BATCH {
+        max_batch.push_back(Address::generate(&env));
+    }
+
+    let contributions = client.get_contributions(&max_batch);
+    assert_eq!(contributions.len(), crate::MAX_INVESTOR_READ_BATCH);
+    for contribution in contributions {
+        assert_eq!(contribution, 0);
+    }
+
+    max_batch.push_back(Address::generate(&env));
+    assert_contract_error(
+        client.try_get_contributions(&max_batch),
+        EscrowError::ContributionReadBatchTooLarge,
+    );
+}
+
+#[test]
 
 fn test_repeated_funding_accumulates_contribution() {
     let env = Env::default();
@@ -3865,6 +3887,28 @@ fn init_with_maturity(
 }
 
 #[test]
+fn preview_commitment_lock_must_not_extend_past_maturity() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let mut ledger = env.ledger().get();
+    ledger.timestamp = 1_000;
+    env.ledger().set(ledger);
+    init_with_maturity(&env, &client, &admin, &sme, 2_000);
+
+    assert_eq!(
+        client.preview_yield_tier(&1_000i128, &1_000u64),
+        crate::YieldResolution {
+            effective_yield_bps: 800,
+            matched_lock_secs: 0,
+        }
+    );
+    assert_contract_error(
+        client.try_preview_yield_tier(&1_000i128, &1_001u64),
+        EscrowError::CommitmentLockExceedsMaturity,
+    );
+}
+
+#[test]
 #[ignore = "triaged: commitment-lock path requires API reconciliation"]
 fn commitment_lock_within_maturity_is_accepted() {
     // now=1000, maturity=2000, lock=500 → claim_nb=1500 ≤ 2000  ✓
@@ -7092,6 +7136,50 @@ fn test_unfund_partial() {
     assert_eq!(result.funded_amount, TARGET / 8);
     assert_eq!(client.get_unique_funder_count(), 1);
     assert_eq!(result.status, 0);
+}
+
+#[test]
+fn test_partial_unfund_clears_commitment_tier_state() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let investor = Address::generate(&env);
+    let (token, treasury) = free_addresses(&env);
+    let mut tiers = SorobanVec::new(&env);
+    tiers.push_back(YieldTier {
+        min_lock_secs: 30,
+        yield_bps: 900,
+    });
+    client.init(
+        &admin,
+        &String::from_str(&env, "UFLOCK1"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &0u64,
+        &token,
+        &None,
+        &treasury,
+        &Some(tiers),
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None::<i64>,
+        &None::<u32>,
+    );
+
+    client.fund_with_commitment(&investor, &1_000i128, &60u64);
+    assert_eq!(client.get_investor_yield_bps(&investor), 900);
+    assert_eq!(client.get_investor_claim_not_before(&investor), 60);
+
+    client.unfund(&investor, &400i128);
+
+    assert_eq!(client.get_contribution(&investor), 600);
+    assert_eq!(client.get_investor_yield_bps(&investor), 800);
+    assert_eq!(client.get_investor_claim_not_before(&investor), 0);
 }
 
 #[test]

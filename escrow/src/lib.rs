@@ -3593,6 +3593,30 @@ impl StarfundEscrow {
         }
     }
 
+    fn commitment_claim_not_before(
+        env: &Env,
+        escrow: &InvoiceEscrow,
+        committed_lock_secs: u64,
+    ) -> u64 {
+        if committed_lock_secs == 0 {
+            return 0;
+        }
+
+        let claim_not_before = env
+            .ledger()
+            .timestamp()
+            .checked_add(committed_lock_secs)
+            .unwrap_or_else(|| fail(env, EscrowError::InvestorClaimTimeOverflow));
+        if escrow.maturity > 0 {
+            ensure(
+                env,
+                claim_not_before <= escrow.maturity,
+                EscrowError::CommitmentLockExceedsMaturity,
+            );
+        }
+        claim_not_before
+    }
+
     /// Initialize escrow. `funding_target` defaults to `amount`.
     ///
     /// Binds **`funding_token`**, **`treasury`**, and optional **`registry`** for this instance only.
@@ -5186,6 +5210,7 @@ impl StarfundEscrow {
     pub fn preview_yield_tier(env: Env, amount: i128, lock: u64) -> YieldResolution {
         let _ = amount; // accepted for signature parity with fund_with_commitment; unused in lock-only selection
         let escrow = Self::get_escrow(env.clone());
+        Self::commitment_claim_not_before(&env, &escrow, lock);
         Self::effective_yield_for_commitment(&env, escrow.yield_bps, lock)
     }
 
@@ -9984,7 +10009,8 @@ impl StarfundEscrow {
     ///
     /// When the investor's contribution reaches zero the `DataKey::UniqueFunderCount` is
     /// decremented by one (floor: 0, via saturating arithmetic). Status always remains 0;
-    /// `unfund` never triggers a state transition in either direction.
+    /// `unfund` never triggers a state transition in either direction. Any withdrawal
+    /// invalidates the investor's previous commitment tier for the remaining contribution.
     ///
     /// # Parameters
     /// - `investor`: The address whose contribution is being reduced. Must match `require_auth`.
@@ -10034,6 +10060,7 @@ impl StarfundEscrow {
 
         // 6. Effects ΓÇö update contribution (checks-effects-interactions).
         Self::set_persistent_investor_contribution(&env, investor.clone(), remaining_contribution);
+        Self::clear_persistent_investor_tier_state(&env, investor.clone());
 
         // 7. Clear the investor registration when the contribution reaches zero.
         // This keeps the paginated investor index and the distinct-funder count aligned,
@@ -10049,7 +10076,6 @@ impl StarfundEscrow {
                 .instance()
                 .set(&keys::unique_funder_count(), &cur.saturating_sub(1));
             Self::remove_investor_from_index(&env, &investor);
-            Self::clear_persistent_investor_tier_state(&env, investor.clone());
         }
 
         // 8. Persist updated escrow.
