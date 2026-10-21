@@ -38,7 +38,6 @@ fn funded_client(env: &Env) -> (StarfundEscrowClient<'_>, Address, Address) {
     );
     let investor = Address::generate(env);
     sac_admin.mint(&investor, &100_000_000_000i128);
-    // Funding the full `funding_target` moves the escrow to status 1 (Funded).
     client.fund(&investor, &100_000_000_000i128);
     sac_admin.mint(&client.address, &100_000_000_000i128);
     (client, admin, sme)
@@ -87,9 +86,8 @@ fn release_before_funding_is_rejected() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     let investor = Address::generate(&env);
     sac_admin.mint(&investor, &90_000_000_000i128);
     client.fund(&investor, &90_000_000_000i128);
@@ -134,9 +132,8 @@ fn close_during_dispute_is_blocked() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     client.open_dispute(&admin);
 
     let result = client.try_close_escrow();

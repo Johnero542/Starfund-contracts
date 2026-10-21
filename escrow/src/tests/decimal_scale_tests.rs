@@ -384,9 +384,8 @@ fn decimal_scale_no_token_decimals_skips_validation() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let investor = Address::generate(&env);
     // Amount with fractional remainder that would fail under 2-decimal scale

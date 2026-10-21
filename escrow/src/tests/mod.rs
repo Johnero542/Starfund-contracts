@@ -132,9 +132,8 @@ pub fn default_init(client: &StarfundEscrowClient<'_>, env: &Env, admin: &Addres
         &None, // No funding deadline
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 }
 
 #[allow(dead_code)]
@@ -173,9 +172,8 @@ pub fn init_and_fund_with_real_token<'a>(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let investor = Address::generate(env);
     sac_admin.mint(&investor, &target);

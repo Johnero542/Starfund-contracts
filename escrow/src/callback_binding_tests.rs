@@ -46,9 +46,8 @@ fn deploy_escrow<'a>(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     (client, admin, sme, id)
 }
 

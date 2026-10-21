@@ -108,9 +108,8 @@ fn do_init(
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 }
 
 // ── get_investors ─────────────────────────────────────────────────────────────
@@ -181,9 +180,8 @@ fn get_investors_first_page() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     // Fund with 5 investors
     let mut investors = soroban_sdk::Vec::new(&env);
@@ -234,9 +232,8 @@ fn get_investors_continuation_page() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let mut investors = soroban_sdk::Vec::new(&env);
     for _ in 0..5 {
@@ -285,9 +282,8 @@ fn get_investors_start_past_end_returns_empty() {
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
 
     let inv = Address::generate(&env);
     sac_admin.mint(&inv, &200_000_000i128);
@@ -322,9 +318,8 @@ fn setup_allowlist_escrow(env: &Env) -> (crate::StarfundEscrowClient<'_>, Addres
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     (client, admin, sme)
 }
 
@@ -448,9 +443,8 @@ fn setup_attestation_escrow(env: &Env) -> (crate::StarfundEscrowClient<'_>, Addr
         &None,
         &None,
         &None,
-        &None::<i64>,
-        &None::<u32>,
-    );
+        &None,
+        &None);
     (client, admin)
 }
 
