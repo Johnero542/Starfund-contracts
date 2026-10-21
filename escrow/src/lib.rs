@@ -503,6 +503,10 @@ pub const MAX_DUST_SWEEP_AMOUNT: i128 = 100_000_000;
 /// Maximum UTF-8 byte length for the invoice `String` at init (matches Soroban [`Symbol`] max).
 pub const MAX_INVOICE_ID_STRING_LEN: u32 = 32;
 
+/// Maximum UTF-8 byte length for the reason string in [`StarfundEscrow::recover_admin`].
+/// Prevents storage rent griefing via unbounded reason strings in [`AdminRecoveredEvent`].
+pub const MAX_RECOVER_ADMIN_REASON_LEN: u32 = 256;
+
 /// Default validity window for [`StarfundEscrow::propose_admin`] when no explicit window is supplied.
 ///
 /// After `ledger.timestamp() + DEFAULT_ADMIN_PROPOSAL_VALIDITY_SECS`, [`StarfundEscrow::accept_admin`]
@@ -4347,7 +4351,7 @@ impl StarfundEscrow {
     /// even after resolution so audits can reconstruct the timeline without replaying off-chain
     /// events. The contract does not expose a "release while disputed" shortcut. Any value-moving
     /// entrypoint must check `DataKey::DisputeActive` before transferring tokens or changing state.
-    pub fn open_dispute(env: Env, caller: Address) {
+    pub fn open_dispute(env: Env, caller: Address, expected_nonce: u32) {
         let escrow = Self::load_escrow_require_admin(&env);
         caller.require_auth();
         ensure(
@@ -4355,6 +4359,7 @@ impl StarfundEscrow {
             caller == escrow.admin,
             EscrowError::DisputeOpenUnauthorized,
         );
+        Self::consume_admin_nonce(&env, expected_nonce);
         ensure(
             &env,
             !Self::is_dispute_active(env.clone()),
@@ -4379,7 +4384,7 @@ impl StarfundEscrow {
     }
 
     /// Admin-only dispute resolution: close the dispute while preserving the original record.
-    pub fn close_dispute(env: Env, caller: Address, resolved: bool) {
+    pub fn close_dispute(env: Env, caller: Address, resolved: bool, expected_nonce: u32) {
         let escrow = Self::load_escrow_require_admin(&env);
         caller.require_auth();
         ensure(
@@ -4387,6 +4392,7 @@ impl StarfundEscrow {
             caller == escrow.admin,
             EscrowError::DisputeCloseUnauthorized,
         );
+        Self::consume_admin_nonce(&env, expected_nonce);
         ensure(
             &env,
             Self::is_dispute_active(env.clone()),
@@ -9300,11 +9306,28 @@ impl StarfundEscrow {
     /// - [`EscrowError::NoPendingAdmin`] if no proposal is pending (including a repeated
     ///   recovery after a successful recovery).
     /// - [`EscrowError::AdminRecoveryNotExpired`] if the proposal timelock has not elapsed.
+    /// - [`EscrowError::RecoverAdminReasonTooLong`] if the reason exceeds [`MAX_RECOVER_ADMIN_REASON_LEN`].
+    /// - [`EscrowError::AdminNonceMismatch`] if `expected_nonce` does not match the stored admin nonce.
     ///
     /// # Events
     /// Emits [`AdminRecoveredEvent`] (topic: `adm_rec`).
-    pub fn recover_admin(env: Env, reason: String) -> Address {
-        let escrow = Self::load_escrow_require_admin(&env);
+    pub fn recover_admin(env: Env, reason: String, expected_nonce: u32) -> Address {
+        // Load escrow without requiring current admin auth (enables recovery when admin key is lost).
+        let escrow: InvoiceEscrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::Escrow)
+            .unwrap_or_else(|| fail(&env, EscrowError::EscrowNotInitialized));
+
+        // Validate reason string length to prevent storage rent griefing.
+        ensure(
+            &env,
+            (reason.len() as u32) <= MAX_RECOVER_ADMIN_REASON_LEN,
+            EscrowError::RecoverAdminReasonTooLong,
+        );
+
+        // Consume admin nonce for replay protection.
+        Self::consume_admin_nonce(&env, expected_nonce);
 
         let pending: Option<Address> = env.storage().instance().get(&DataKey::PendingAdmin);
         ensure(&env, pending.is_some(), EscrowError::NoPendingAdmin);
