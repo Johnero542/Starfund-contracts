@@ -793,9 +793,14 @@ arises when off-chain tooling re-derives the formula from raw snapshot fields.
 ```text
 settle_pool_i = total_principal + total_principal × effective_yield_bps_i / 10_000  (floor)
 payout_i      = contribution_i × settle_pool_i / total_principal   (floor)
+if effective_yield_bps_i > 0 and payout_i == contribution_i:
+    payout_i += 1
 
 get_settlement_pool() = Σ_i payout_i
 ```
+
+The extra base unit is the minimum coupon when positive yield would otherwise be rounded
+away for an investor. The aggregate view includes these units.
 
 Where `total_principal` is from `DataKey::FundingCloseSnapshot`, `contribution_i` from
 `DataKey::InvestorContribution`, and `effective_yield_bps_i` is the investor's tiered yield
